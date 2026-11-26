@@ -93,6 +93,7 @@ export function createAudio(getSettings) {
     else if (kind === 'stamp') { tone(sfxGain, 196, t0, 0.14, 'square', 0.2, 60); tone(sfxGain, 880, t0 + 0.1, 0.2, 'sine', 0.1); }
     else if (kind === 'splash') tone(sfxGain, 320, t0, 0.4, 'sawtooth', 0.08, 70);
     else if (kind === 'warn') tone(sfxGain, 440, t0, 0.12, 'square', 0.07);
+    else if (kind === 'stall') { tone(sfxGain, 233, t0, 0.16, 'square', 0.10); tone(sfxGain, 233, t0 + 0.22, 0.16, 'square', 0.10); }
     else if (kind === 'coin') { tone(sfxGain, 988, t0, 0.1, 'sine', 0.12); tone(sfxGain, 1319, t0 + 0.08, 0.18, 'sine', 0.12); }
   }
   return { ensure, applyLevels, startMusic, stopMusic, engineStart, engineSet, engineStop, blip,

@@ -20,28 +20,34 @@ const norm = v => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / 
 // that makes lamps and lit windows glow as darkness falls (emis).
 // The 18.25 keyframe IS the game's original golden-hour palette, kept exact:
 // senja is now one hour of the day instead of the whole sky.
+// Night (v12 brightening): the owner's playtest verdict was that the
+// night was too dark to fly by. The moon now does real work — ambient
+// roughly doubled, the sky a readable moonlit blue, the sea lifted, and
+// the emissive gain raised so windows, lamps and ring cores carry
+// further. It still reads as night (stars full, sun a cool moon), just
+// a night a pilot can see in.
 const NIGHT = {
-  skyLow: [0.05, 0.07, 0.14], skyMid: [0.03, 0.05, 0.11], skyTop: [0.01, 0.02, 0.06],
-  fog: [0.04, 0.06, 0.11], fogD: 0.00042,
-  sunDir: [0.42, 0.68, -0.55], sunCol: [0.50, 0.62, 0.95], sunI: 0.32,
-  discCol: [0.82, 0.88, 1.00], haloCol: [0.35, 0.45, 0.75], discI: 0.55,
-  ambLo: [0.045, 0.06, 0.11], ambHi: [0.09, 0.12, 0.19],
-  seaDeep: [0.008, 0.025, 0.06], seaLift: [0.02, 0.06, 0.11],
-  sparkle: [0.65, 0.78, 1.00], glitter: 0.8, sheen: [0.35, 0.45, 0.75], sheenI: 0.12,
-  stars: 1.0, emis: 2.2,
+  skyLow: [0.10, 0.14, 0.24], skyMid: [0.06, 0.10, 0.20], skyTop: [0.03, 0.05, 0.12],
+  fog: [0.08, 0.11, 0.19], fogD: 0.00042,
+  sunDir: [0.42, 0.68, -0.55], sunCol: [0.62, 0.74, 1.00], sunI: 0.50,
+  discCol: [0.88, 0.93, 1.00], haloCol: [0.40, 0.52, 0.82], discI: 0.85,
+  ambLo: [0.10, 0.13, 0.20], ambHi: [0.20, 0.24, 0.33],
+  seaDeep: [0.015, 0.05, 0.10], seaLift: [0.05, 0.11, 0.19],
+  sparkle: [0.70, 0.82, 1.00], glitter: 0.9, sheen: [0.40, 0.52, 0.82], sheenI: 0.20,
+  stars: 1.0, emis: 2.7,
 };
 export const PHASE_KEYS = [
   { h: 0.0, ...NIGHT },
-  { h: 4.5, ...NIGHT, fogD: 0.00048, stars: 0.9, emis: 2.0 },
+  { h: 4.5, ...NIGHT, fogD: 0.00048, stars: 0.9, emis: 2.3 },
   { h: 5.0, // pre-dawn: the east warms before the sun does
     skyLow: [0.16, 0.13, 0.22], skyMid: [0.08, 0.08, 0.16], skyTop: [0.03, 0.04, 0.10],
     fog: [0.14, 0.12, 0.18], fogD: 0.00055,
     sunDir: [0.42, 0.68, -0.55], sunCol: [0.50, 0.60, 0.90], sunI: 0.30,
     discCol: [0.80, 0.85, 1.00], haloCol: [0.35, 0.45, 0.75], discI: 0.40,
-    ambLo: [0.07, 0.07, 0.12], ambHi: [0.13, 0.13, 0.20],
+    ambLo: [0.10, 0.10, 0.16], ambHi: [0.17, 0.17, 0.25],
     seaDeep: [0.02, 0.06, 0.12], seaLift: [0.05, 0.12, 0.20],
     sparkle: [0.70, 0.75, 0.95], glitter: 0.7, sheen: [0.50, 0.50, 0.70], sheenI: 0.10,
-    stars: 0.55, emis: 1.6 },
+    stars: 0.55, emis: 1.9 },
   { h: 6.25, // fajar: pale orange horizon, mist on the water
     skyLow: [0.98, 0.62, 0.38], skyMid: [0.62, 0.50, 0.55], skyTop: [0.25, 0.32, 0.55],
     fog: [0.85, 0.60, 0.45], fogD: 0.00062,
@@ -110,19 +116,19 @@ export const PHASE_KEYS = [
     fog: [0.62, 0.38, 0.36], fogD: 0.00055,
     sunDir: [-0.55, 0.10, -0.78], sunCol: [1.00, 0.55, 0.35], sunI: 0.40,
     discCol: [1.00, 0.60, 0.35], haloCol: [0.90, 0.40, 0.25], discI: 0.9,
-    ambLo: [0.18, 0.12, 0.18], ambHi: [0.30, 0.24, 0.30],
+    ambLo: [0.22, 0.16, 0.22], ambHi: [0.36, 0.30, 0.36],
     seaDeep: [0.03, 0.12, 0.22], seaLift: [0.08, 0.24, 0.34],
     sparkle: [0.95, 0.60, 0.40], glitter: 0.8, sheen: [0.80, 0.40, 0.30], sheenI: 0.20,
-    stars: 0.25, emis: 1.2 },
+    stars: 0.25, emis: 1.5 },
   { h: 19.75, // twilight: first stars, lamps take over
-    skyLow: [0.30, 0.22, 0.34], skyMid: [0.14, 0.14, 0.28], skyTop: [0.05, 0.06, 0.16],
+    skyLow: [0.36, 0.28, 0.42], skyMid: [0.14, 0.14, 0.28], skyTop: [0.05, 0.06, 0.16],
     fog: [0.20, 0.17, 0.26], fogD: 0.00050,
     sunDir: [0.30, 0.50, -0.60], sunCol: [0.50, 0.60, 0.90], sunI: 0.30,
     discCol: [0.80, 0.86, 1.00], haloCol: [0.40, 0.50, 0.80], discI: 0.5,
-    ambLo: [0.08, 0.09, 0.15], ambHi: [0.15, 0.17, 0.25],
+    ambLo: [0.12, 0.13, 0.20], ambHi: [0.21, 0.23, 0.31],
     seaDeep: [0.015, 0.05, 0.10], seaLift: [0.04, 0.10, 0.17],
     sparkle: [0.70, 0.80, 1.00], glitter: 0.8, sheen: [0.40, 0.50, 0.80], sheenI: 0.12,
-    stars: 0.8, emis: 2.0 },
+    stars: 0.8, emis: 2.4 },
   { h: 21.5, ...NIGHT },
   { h: 24.0, ...NIGHT },
 ];

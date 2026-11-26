@@ -87,7 +87,15 @@ function beam(b, p0, p1, w, color) {
 
 const GLASS = [0.07, 0.13, 0.18], METAL = [0.58, 0.60, 0.63], RUBBER = [0.16, 0.13, 0.11];
 
-export function buildPlane(R) {
+// One airframe builder, four liveries (v12): the fleet's planes are the
+// same shaped body wearing different paint, spans and cheatlines — the
+// spec comes from planes.js (body / accent / cheat colours, wing span).
+// With no spec it builds the starter exactly as she has always looked.
+export function buildPlane(R, spec) {
+  const CREAM = spec ? spec.body : [0.96, 0.86, 0.64];
+  const RED = spec ? spec.accent : [0.80, 0.22, 0.15];
+  const TEAL = spec ? spec.cheat : [0.09, 0.26, 0.31];
+  const SPAN = spec ? spec.span : 1;
   const b = new Builder();
   // Fuselage: nose at -Z, tail at +Z, origin at the waterline. Seven
   // sections now, each with its own centre height, so the nose droops
@@ -122,13 +130,13 @@ export function buildPlane(R) {
   // Main wing: tapered, swept and dihedralled in two sections a side,
   // red outer panels, winglets standing at the tips.
   for (const sx of [-1, 1]) {
-    segX(b, 0, 1.85, 0.17, 1.52, -0.30, sx * 3.2, 1.55, 0.135, 1.64, -0.40, CREAM);
-    segX(b, sx * 3.2, 1.55, 0.135, 1.64, -0.40, sx * 5.05, 1.22, 0.11, 1.76, -0.50, CREAM);
-    segX(b, sx * 5.05, 1.22, 0.11, 1.76, -0.50, sx * 5.60, 1.02, 0.095, 1.82, -0.56, RED);
-    b.box(sx * 5.62, 2.06, -0.58, 0.055, 0.52, 0.78, RED); // winglet
+    segX(b, 0, 1.85, 0.17, 1.52, -0.30, sx * 3.2 * SPAN, 1.55, 0.135, 1.64, -0.40, CREAM);
+    segX(b, sx * 3.2 * SPAN, 1.55, 0.135, 1.64, -0.40, sx * 5.05 * SPAN, 1.22, 0.11, 1.76, -0.50, CREAM);
+    segX(b, sx * 5.05 * SPAN, 1.22, 0.11, 1.76, -0.50, sx * 5.60 * SPAN, 1.02, 0.095, 1.82, -0.56, RED);
+    b.box(sx * 5.62 * SPAN, 2.06, -0.58, 0.055, 0.52, 0.78, RED); // winglet
     // Wing struts: a slanted pair per side, fuselage low to wing underside.
-    beam(b, [sx * 0.52, 0.52, -0.95], [sx * 2.25, 1.50, -0.62], 0.09, METAL);
-    beam(b, [sx * 0.52, 0.52, 0.35], [sx * 2.25, 1.50, 0.02], 0.09, METAL);
+    beam(b, [sx * 0.52, 0.52, -0.95], [sx * 2.25 * SPAN, 1.50, -0.62], 0.09, METAL);
+    beam(b, [sx * 0.52, 0.52, 0.35], [sx * 2.25 * SPAN, 1.50, 0.02], 0.09, METAL);
   }
   // Tail unit: a tapered tailplane with red tips, and a two-piece fin
   // with a cream flash and a darker rudder behind its hinge line.
@@ -143,8 +151,8 @@ export function buildPlane(R) {
   // Navigation and landing lights: colours pushed past 1.0, so the lit
   // shader's emissive term takes them over as the light falls — port red,
   // starboard green, a white tail light, and the landing lamp under the nose.
-  b.box(-5.66, 1.82, -0.56, 0.26, 0.12, 0.26, [1.7, 0.18, 0.12]);
-  b.box(5.66, 1.82, -0.56, 0.26, 0.12, 0.26, [0.20, 1.50, 0.35]);
+  b.box(-5.66 * SPAN, 1.82, -0.56, 0.26, 0.12, 0.26, [1.7, 0.18, 0.12]);
+  b.box(5.66 * SPAN, 1.82, -0.56, 0.26, 0.12, 0.26, [0.20, 1.50, 0.35]);
   b.box(0, 3.22, 3.50, 0.18, 0.11, 0.18, [1.5, 1.5, 1.4]);
   b.box(0, 0.52, -2.90, 0.34, 0.12, 0.14, [1.9, 1.8, 1.5]);
   // Twin floats, refined: a planing step amidships and an upswept tail,
@@ -222,6 +230,16 @@ export function buildIsland(R, seed, scale = 1) {
   b.cone(0, 0.2, 0, r, 13 * scale, 9, GREEN2);
   b.cone(10 * scale, 0.2, -8 * scale, r * 0.55, 19 * scale, 8, GREEN);
   b.cone(-16 * scale, 0.2, 10 * scale, r * 0.4, 9 * scale, 7, ROCK);
+  // The volcano (v12): every island in the chain is a young volcano, and
+  // now she looks it — a great cone behind the settlement, forested at
+  // the skirt, bare rock at the shoulder, a dark crater at the crown.
+  // It stands off the shore axis the strip faces, so the approach over
+  // the beach never meets it.
+  const vx = -20 * scale, vz = 14 * scale;
+  b.cone(vx, 0.2, vz, r * 0.52, 21 * scale, 10, [0.27, 0.42, 0.26]);
+  b.cone(vx, 0.2 + 13 * scale, vz, r * 0.30, 9 * scale, 9, [0.44, 0.40, 0.37]);
+  b.disc(vx, 0.2 + 21.8 * scale, vz, r * 0.085, 8, [0.24, 0.20, 0.18]); // the crater
+  b.cone(vx + 26 * scale, 0.2, vz + 10 * scale, r * 0.30, 10 * scale, 8, GREEN2); // a foothill ridge
   // Rock outcrops standing in the surf at the shore.
   const ra = rnd() * Math.PI * 2;
   b.cone(Math.cos(ra) * r * 1.04, 0.05, Math.sin(ra) * r * 1.04, r * 0.15, 2.0 * scale, 6, ROCK);
@@ -246,6 +264,17 @@ export function buildIsland(R, seed, scale = 1) {
     b.box(wx, 1.15 * s, wz, 7.5 * s, 2.3 * s, 4.2 * s, [0.74, 0.68, 0.58]);
     b.frustum(wx, 2.95 * s, wz, 8.3 * s, 1.3 * s, 5.0 * s, 0.10, [0.50, 0.30, 0.18]);
     b.box(wx, 0.95 * s, wz - 2.15 * s, 1.7 * s, 1.9 * s, 0.15, [0.28, 0.20, 0.14]);
+  }
+  // A lighthouse watches the island's far shore (v12): banded tower,
+  // a lamp room that burns past 1.0 so the night emissive takes it —
+  // one more light a night approach can steer by.
+  if (rnd() < 0.7) {
+    const la = baseA + 2.6, lx = Math.cos(la) * r * 1.02, lz = Math.sin(la) * r * 1.02, ls = scale;
+    b.box(lx, 1.6 * ls, lz, 1.7 * ls, 3.2 * ls, 1.7 * ls, [0.92, 0.90, 0.86]);
+    b.box(lx, 4.4 * ls, lz, 1.5 * ls, 2.4 * ls, 1.5 * ls, [0.72, 0.22, 0.16]);
+    b.box(lx, 6.8 * ls, lz, 1.3 * ls, 2.4 * ls, 1.3 * ls, [0.92, 0.90, 0.86]);
+    b.box(lx, 8.6 * ls, lz, 1.6 * ls, 1.2 * ls, 1.6 * ls, [2.2, 1.9, 1.2]); // the lamp
+    b.cone(lx, 9.2 * ls, lz, 1.35 * ls, 1.1 * ls, 6, [0.30, 0.30, 0.34]);
   }
   // A jetty reaches into the shallows near the settlement: a deck on
   // posts with a crate stack, aligned to whichever shore axis is nearer.
@@ -444,6 +473,14 @@ export const HOME_TERRAIN = {
     { x: -145, z: 185, r: 50, h: 9, kind: 'hill' },
     { x: 120, z: 150, r: 40, h: 6, kind: 'grass' },
     { x: -70, z: -330, r: 34, h: 4, kind: 'grass' },
+    // Real mountains (v12): volcanic cones two to three times the hills'
+    // height, standing well clear of the strip corridor and the climb-
+    // out line — landmarks on the horizon, never obstacles in it. The
+    // deck-burial rule still holds: none of them reaches the footprint.
+    { x: -265, z: -430, r: 95, h: 36, kind: 'mountain' },
+    { x: 245, z: -395, r: 85, h: 30, kind: 'mountain' },
+    { x: -240, z: 275, r: 75, h: 24, kind: 'mountain' },
+    { x: 210, z: 300, r: 60, h: 18, kind: 'hill' },
   ],
 };
 // The terrain's top height at a point: the highest shape covering it,
@@ -470,6 +507,14 @@ export function buildHomeTerrain(R) {
     b.disc(d.x, d.y, d.z, d.r, 30, d.kind === 'sand' ? SANDS[si++ % SANDS.length] : GREENS[gi++ % GREENS.length]);
   }
   for (const c of HOME_TERRAIN.cones) {
+    if (c.kind === 'mountain') {
+      // A volcano's profile: a broad forested base, a bare rock shoulder,
+      // and a pale cap — three stacked cones reading as one great peak.
+      b.cone(c.x, 0.01, c.z, c.r, c.h * 0.62, 11, [0.30, 0.44, 0.28]);
+      b.cone(c.x, 0.01 + c.h * 0.55, c.z, c.r * 0.52, c.h * 0.34, 10, [0.42, 0.40, 0.38]);
+      b.cone(c.x, 0.01 + c.h * 0.84, c.z, c.r * 0.20, c.h * 0.16, 9, [0.80, 0.82, 0.85]);
+      continue;
+    }
     b.cone(c.x, 0.01, c.z, c.r, c.h, 10, c.kind === 'hill' ? [0.36, 0.46, 0.30] : GREEN2);
   }
   // Palms dress the grass lobes — never the corridor, never the apron.
@@ -533,6 +578,45 @@ export function buildAirport(R) {
   b.box(15.5, 0.045, -6, 7, 0.09, 5, [0.30, 0.30, 0.33]);
   b.box(28, 0.85, 12, 4.8, 1.7, 2.1, [0.85, 0.83, 0.78]); // van body
   b.box(28, 1.15, 9.7, 4.3, 0.9, 1.4, [0.30, 0.36, 0.42]); // van cab
+  // A depot wing and fuel farm (v12): a third building on the apron, two
+  // squat fuel tanks on a pad, and apron light poles whose heads burn
+  // warm past 1.0 — so the home field glows as a place at night.
+  b.box(52, 2.2, 26, 10, 4.4, 7, WALL); // depot wing
+  b.box(52, 4.7, 26, 11, 0.9, 8, ROOF);
+  for (const wx of [48.5, 52, 55.5]) b.box(wx, 2.4, 22.4, 2.0, 1.3, 0.18, WIN);
+  b.box(58, 0.45, -34, 15, 0.9, 9, [0.42, 0.42, 0.44]); // tank pad
+  for (const tx of [53.5, 62]) {
+    b.box(tx, 2.5, -34, 6.2, 4.1, 6.2, [0.78, 0.76, 0.72]);
+    b.box(tx, 4.75, -34, 6.4, 0.4, 6.4, [0.62, 0.60, 0.57]);
+    b.box(tx, 5.2, -34, 1.0, 0.6, 1.0, [0.50, 0.50, 0.52]);
+  }
+  for (const [lx, lz] of [[16, 6], [16, 44], [44, 40]]) {
+    b.box(lx, 3.4, lz, 0.24, 6.8, 0.24, [0.55, 0.56, 0.60]);
+    b.box(lx, 7.0, lz, 1.1, 0.5, 1.1, [2.3, 1.9, 1.1]); // the apron lamp
+  }
+  return R.makeMesh(b);
+}
+
+// The rescue boat (v12): a small open launch that waits at sea with a
+// lantern burning — the rescue ticket's mark in the world. Hull, cabin,
+// a mast light, and a pale pickup ring floating on the water around her.
+export function buildBoat(R) {
+  const b = new Builder();
+  b.box(0, 0.35, 0, 2.2, 0.7, 6.4, [0.85, 0.40, 0.18]); // hull
+  b.box(0, 0.85, -0.6, 1.7, 0.5, 3.4, [0.92, 0.90, 0.84]); // deckhouse
+  b.box(0, 1.35, -0.4, 0.16, 1.4, 0.16, [0.45, 0.42, 0.40]); // mast
+  b.box(0, 2.2, -0.4, 0.5, 0.5, 0.5, [2.4, 1.8, 0.9]); // the lantern
+  b.disc(0, 0.12, 0, 24, 20, [0.45, 1.25, 1.35]); // the pickup ring on the water
+  return R.makeMesh(b);
+}
+
+// The survey-photo gate (v12): a sky-blue ring standing over the water,
+// kin to the golden course rings but its own colour and smaller — the
+// photo ticket's mark in the world.
+export function buildGateMesh(R) {
+  const b = new Builder();
+  b.torus(0, 0, 0, 6, 0.55, 10, [0.35, 0.85, 2.0]);
+  b.torus(0, 0, 0, 4.6, 0.30, 10, [0.55, 1.15, 2.2]);
   return R.makeMesh(b);
 }
 
@@ -580,7 +664,7 @@ export function cloudField(legDist) {
       y: 46 + rnd() * 52,
       z: -legDist * (0.1 + 0.85 * (i + rnd() * 0.7) / 9),
       s: 0.8 + rnd() * 1.5,
-      v: i % 2, // two silhouettes alternate down the route
+      v: i % 3, // three silhouettes alternate down the route
     });
   }
   return out;
@@ -588,7 +672,7 @@ export function cloudField(legDist) {
 // Baked cloud shading: sunlit crowns, cooler shadowed undersides — the
 // lit shader multiplies these by the phase light, so a cloud at senja
 // glows amber on top and sinks violet below without any keyframe change.
-const CLOUD_SHADE = { top: [1.16, 1.12, 1.05], bottom: [0.78, 0.82, 0.89] };
+const CLOUD_SHADE = { top: [1.24, 1.19, 1.11], bottom: [0.68, 0.74, 0.84] };
 export function buildCloud(R) {
   const b = new Builder();
   const W = [1.06, 1.02, 0.97];
@@ -605,6 +689,21 @@ export function buildCloud(R) {
   b.box(-2.8, 0.9, -2.5, 5.0, 1.2, 3.0, W, CLOUD_SHADE);
   b.box(-11.5, 0.25, -0.4, 4.4, 0.8, 3.4, W, CLOUD_SHADE); // trailing wisps
   b.box(12.0, 0.3, 0.4, 4.0, 0.8, 3.0, W, CLOUD_SHADE);
+  b.box(-3.4, 1.9, 1.8, 4.6, 1.5, 3.6, W, CLOUD_SHADE); // a second crown shoulder
+  b.box(5.9, 2.6, 1.2, 3.8, 1.3, 3.0, W, CLOUD_SHADE);
+  return R.makeMesh(b);
+}
+export function buildCloudC(R) {
+  const b = new Builder();
+  const W = [1.03, 1.00, 0.97];
+  // The shelf (v12): a stratocumulus deck — broad, layered, long in the
+  // wind — so the route's sky varies in kind: towers, puffs and shelves.
+  b.box(0, 0, 0, 30, 1.3, 8.5, W, CLOUD_SHADE);
+  b.box(-7.5, 0.85, 0.5, 13, 1.1, 6.5, W, CLOUD_SHADE);
+  b.box(8.0, 0.8, -0.5, 12, 1.1, 6.0, W, CLOUD_SHADE);
+  b.box(0.5, 1.55, 0, 10, 0.9, 5.0, W, CLOUD_SHADE);
+  b.box(-16.5, 0.35, -0.8, 7.5, 0.8, 5.0, W, CLOUD_SHADE);
+  b.box(17.0, 0.3, 0.8, 7.0, 0.8, 4.6, W, CLOUD_SHADE);
   return R.makeMesh(b);
 }
 export function buildCloudB(R) {
@@ -812,12 +911,28 @@ export function createScene(R, assets) {
     }
     const pz = -st.dist; // plane z
     let eye, target;
+    // Free-look (v12): the pilot's head turns inside the frame the
+    // camera mode built — yaw the full circle, pitch to a neck's reach.
+    // Only the VIEW moves; the plane's course, heading and controls are
+    // untouched, and the cockpit overlay below is drawn in camera space,
+    // so the panel stays bolted to the plane while the eyes wander.
+    const lookYaw = st.lookYaw || 0, lookPitch = st.lookPitch || 0;
     if (st.camMode === 'cockpit') {
       // Over the nose: the camera sits in the pilot's seat — no spring lag,
       // the world answers the controls directly.
       eye = [st.x, st.alt + 2.35, pz - 0.4];
       target = [st.x - st.bank * 3, st.alt + 1.15 + st.pitchVis * 6, pz - 40];
       cam.x = st.x * 0.84; cam.alt = st.alt + 5.4; // keep the chase spring warm
+      if (lookYaw || lookPitch) {
+        let d = norm3(sub3(target, eye));
+        const cy = Math.cos(lookYaw), sy = Math.sin(lookYaw);
+        d = [d[0] * cy + d[2] * sy, d[1], -d[0] * sy + d[2] * cy];
+        const r = norm3(cross3(d, [0, 1, 0]));
+        const cp = Math.cos(lookPitch), sp = Math.sin(lookPitch);
+        const rxd = cross3(r, d);
+        d = [d[0] * cp + rxd[0] * sp, d[1] * cp + rxd[1] * sp, d[2] * cp + rxd[2] * sp];
+        target = [eye[0] + d[0] * 40, eye[1] + d[1] * 40, eye[2] + d[2] * 40];
+      }
     } else {
       const back = st.camMode === 'far' ? 30 : (st.camBack || 16.5);
       const up = st.camMode === 'far' ? 4.5 : (st.camUp || 0);
@@ -827,6 +942,20 @@ export function createScene(R, assets) {
       // The aim point rides above the plane (she sits low in frame) and swings
       // with her pitch, so pitching visibly tilts the horizon and the sea.
       target = [st.x * 0.94 - st.bank * 2.2, st.alt + (st.aimDy ?? 2.4) + st.pitchVis * 5.5, pz - 30];
+      if (lookYaw || lookPitch) {
+        // The camera swings around the plane on its own boom: the eye
+        // orbits the airframe, the aim stays on her.
+        const anchor = [st.x, st.alt + 0.62, pz];
+        let off = sub3(eye, anchor);
+        const cy = Math.cos(lookYaw), sy = Math.sin(lookYaw);
+        off = [off[0] * cy + off[2] * sy, off[1], -off[0] * sy + off[2] * cy];
+        const ax = norm3(cross3([0, 1, 0], off));
+        const pa = lookPitch * 0.7, cp = Math.cos(pa), sp = Math.sin(pa);
+        const axo = cross3(ax, off);
+        off = [off[0] * cp + axo[0] * sp, off[1] * cp + axo[1] * sp, off[2] * cp + axo[2] * sp];
+        eye = [anchor[0] + off[0], anchor[1] + off[1], anchor[2] + off[2]];
+        target = anchor;
+      }
     }
     const view = M4.lookAt(eye, target, [0, 1, 0]);
     R.setCamera(view, projCache.m, eye);
@@ -902,7 +1031,17 @@ export function createScene(R, assets) {
     if (cloudCache.leg !== st.legDist) cloudCache = { leg: st.legDist, field: cloudField(st.legDist) };
     for (const c of cloudCache.field) {
       if (Math.abs(c.z - pz) > 1000) continue;
-      R.draw(c.v && assets.cloudB ? assets.cloudB : assets.cloud, M4.compose(c.x, c.y, c.z, 0, 0, 0, c.s), 0.88);
+      const cm = c.v === 2 && assets.cloudC ? assets.cloudC : (c.v === 1 && assets.cloudB ? assets.cloudB : assets.cloud);
+      R.draw(cm, M4.compose(c.x, c.y, c.z, 0, 0, 0, c.s), 0.88);
+    }
+    // The mission marks (v12): the rescue boat waits at her point with a
+    // lantern and a pale pickup ring on the water; the survey gate
+    // stands at its own point until the camera has fired through it.
+    if (st.pickup && assets.boat) {
+      R.draw(assets.boat, M4.compose(st.pickup.x, 0, -st.pickup.dist, 0, 0.7, 0));
+    }
+    if (st.gate && assets.gate && !st.gate.passed) {
+      R.draw(assets.gate, M4.compose(st.gate.x, st.gate.altM, -st.gate.dist, Math.PI / 2, 0, 0));
     }
     // Rings: the next one bright, the rest gold (fog thins them with range),
     // green once threaded, ghosts once missed. As darkness falls each live
@@ -961,7 +1100,7 @@ export function createScene(R, assets) {
     // stared into the wing strut). The horizon, the rings and the strip are
     // the cockpit's instruments.
     if (st.camMode !== 'cockpit') {
-      const planeM = M4.compose(st.x, st.alt + 0.62, pz, st.pitchVis * 0.38, -st.bank * 0.22, -st.bank * 0.55);
+      const planeM = M4.compose(st.x, st.alt + 0.62, pz, st.pitchVis * 0.38, -st.bank * 0.22, -st.bank * 0.55, st.planeScale || 1);
       R.draw(assets.plane.plane, planeM);
       const propM = M4.mul(planeM, M4.compose(0, 1.00, -3.42, 0, 0, st.propSpin));
       R.draw(assets.plane.prop, propM);

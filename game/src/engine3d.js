@@ -120,15 +120,23 @@ void main(){ vec3 n = normalize(vNor);
   o = vec4(mix(c, uFog, clamp(f,0.0,1.0)), uAlpha); }`;
 const SEA_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
-uniform mat4 uMVP; uniform vec3 uOrigin;
-out vec3 vWorld;
-void main(){ vec3 w = aPos + uOrigin; vWorld = w; gl_Position = uMVP * vec4(w, 1.0); }`;
+uniform mat4 uMVP; uniform vec3 uOrigin; uniform mediump float uTime;
+out vec3 vWorld; out float vWave;
+void main(){ vec3 w = aPos + uOrigin;
+  // A gentle ocean swell (v12): two long waves crossing, crests under a
+  // metre, wavelengths far longer than the mesh cell so the grid carries
+  // them smoothly. Purely visual — the flight model's water stays at
+  // y = 0 whatever the surface draws.
+  float hgt = sin(w.x * 0.045 + uTime * 1.05) * 0.30
+            + sin(w.z * 0.036 - uTime * 0.80) * 0.30
+            + sin((w.x + w.z) * 0.021 + uTime * 0.55) * 0.35;
+  w.y += hgt; vWave = hgt; vWorld = w; gl_Position = uMVP * vec4(w, 1.0); }`;
 const SEA_FS = `#version 300 es
 precision mediump float;
 uniform vec3 uSun; uniform vec3 uCam; uniform float uTime; uniform vec3 uFog; uniform float uFogD;
 uniform vec3 uDeep; uniform vec3 uLift; uniform vec3 uSparkle; uniform float uGlitter;
 uniform vec3 uSheen; uniform float uSheenI;
-in vec3 vWorld; out vec4 o;
+in vec3 vWorld; in float vWave; out vec4 o;
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main(){
   vec3 V = normalize(uCam - vWorld);
@@ -138,7 +146,11 @@ void main(){
   // so the surface carries swells instead of one flat tone between the
   // sparkles — the sea reads as moving water even where nothing glitters.
   vec2 swell = floor(vWorld.xz * 0.045 + vec2(uTime * 0.05, uTime * 0.037));
-  c += uLift * (hash(swell) - 0.5) * 0.11;
+  c += uLift * (hash(swell) - 0.5) * 0.13;
+  // The swell's crests catch the light: as a wave top rolls through, its
+  // face lifts toward the lift tone, so the undulation the vertices draw
+  // also reads in the shading between sparkles.
+  c += uLift * smoothstep(0.30, 0.90, vWave) * 0.17;
   // Sun glitter: sparkle cells that shimmer, gathered into a streak under the
   // sun. The cells are world-sized, so the surface streams past under the
   // plane and its scale reads against altitude; sparkle fades with range so
@@ -180,12 +192,13 @@ void main(){ vec3 d = normalize(vDir);
   c = mix(c, uTop, smoothstep(0.25, 0.85, h));
   c += uLow * (1.0 - smoothstep(0.0, 0.16, h)) * 0.12; // horizon warmth
   float sd = max(dot(d, uSun), 0.0);
-  float sun = pow(sd, 220.0);
+  float sun = pow(sd, 260.0);
   float halo = pow(sd, 7.0);
   float sd2 = sd * sd, sd4 = sd2 * sd2, sd8 = sd4 * sd4;
-  c += uDiscCol * sun * 1.4 * uDiscI + uHaloCol * halo * 0.28 * uDiscI;
-  c += uDiscCol * (sd8 * sd8 * sd8) * 0.16 * uDiscI; // sd^24: the disc's near glow
+  c += uDiscCol * sun * 1.5 * uDiscI + uHaloCol * halo * 0.34 * uDiscI;
+  c += uDiscCol * (sd8 * sd8 * sd8) * 0.20 * uDiscI; // sd^24: the disc's near glow
   c += uHaloCol * (sd2 * sqrt(sd)) * 0.10 * uDiscI; // sd^2.5: a wide wash around it
+  c += uHaloCol * pow(sd, 3.0) * 0.10 * uDiscI; // the far halo: half the sky leans toward the light
   // Stars: a hashed cell field, only above the horizon, only at night.
   if (uStars > 0.01) {
     vec3 cell = floor(d * 130.0);
