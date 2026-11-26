@@ -34,6 +34,13 @@ export function buildPlane(R) {
   b.box(5.15, 1.42, -0.35, 0.55, 0.18, 1.55, RED);
   b.box(0, 1.62, 3.35, 3.5, 0.13, 1.0, CREAM); // tailplane
   b.box(0, 2.25, 3.45, 0.15, 1.45, 1.05, RED); // fin
+  // Navigation and landing lights: colours pushed past 1.0, so the lit
+  // shader's emissive term takes them over as the light falls — port red,
+  // starboard green, a white tail light, and the landing lamp under the nose.
+  b.box(-5.48, 1.42, -0.35, 0.3, 0.13, 0.3, [1.7, 0.18, 0.12]);
+  b.box(5.48, 1.42, -0.35, 0.3, 0.13, 0.3, [0.20, 1.50, 0.35]);
+  b.box(0, 3.02, 3.45, 0.2, 0.12, 0.2, [1.5, 1.5, 1.4]);
+  b.box(0, 0.52, -2.55, 0.34, 0.12, 0.14, [1.9, 1.8, 1.5]);
   // Twin floats on struts.
   for (const sx of [-1.18, 1.18]) {
     seg(b, -2.5, 0.18, 0.2, -1.9, 0.52, 0.46, -0.55, CREAM, sx);
@@ -131,11 +138,14 @@ export function buildStrip(R) {
 export function buildAirport(R) {
   const b = new Builder();
   const WALL = [0.92, 0.88, 0.80], ROOF = [0.62, 0.25, 0.14], GLASS = [0.15, 0.35, 0.45];
+  const WIN = [1.30, 1.02, 0.50]; // lit windows: emissive past 1.0, they glow at night
   b.box(34, 3, -6, 20, 6, 9, WALL); // terminal
   b.box(34, 6.6, -6, 22, 1.2, 11, ROOF);
   b.box(34, 3.4, -11.2, 14, 2.6, 0.6, GLASS); // terminal windows
+  for (const wx of [28.5, 34, 39.5]) b.box(wx, 3.2, -11.55, 2.6, 1.7, 0.18, WIN); // lit panes over the glass
   b.box(46, 7.5, 8, 3.2, 15, 3.2, WALL); // tower shaft
   b.box(46, 15.8, 8, 5.4, 2.4, 5.4, GLASS); // tower cab
+  b.box(46, 15.8, 5.2, 4.6, 1.8, 0.3, WIN); // the cab's lit face, watching the strip
   b.box(46, 17.4, 8, 6, 0.8, 6, ROOF);
   b.box(24, 2.5, 16, 12, 5, 8, [0.55, 0.58, 0.62]); // hangar
   b.cone(24, 5, 16, 6.4, 2.2, 4, ROOF);
@@ -143,13 +153,14 @@ export function buildAirport(R) {
   return R.makeMesh(b);
 }
 
-// A house: walls, a pyramid roof, a door shadow. Baked into island meshes so
-// every shore carries its settlement.
+// A house: walls, a pyramid roof, a door shadow, one lit window. Baked into
+// island meshes so every shore carries its settlement.
 function house(b, x, z, s, rnd) {
   const wall = [0.90, 0.82, 0.66], roof = [0.60 + rnd() * 0.15, 0.24, 0.13];
   b.box(x, 1.1 * s, z, 3.4 * s, 2.2 * s, 2.8 * s, wall);
   b.frustum(x, 2.9 * s, z, 4.3 * s, 1.4 * s, 3.7 * s, 0.12, roof); // hip roof, aligned with the walls
   b.box(x, 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
+  b.box(x + 0.95 * s, 1.25 * s, z - 1.44 * s, 0.55 * s, 0.6 * s, 0.1, [1.30, 1.02, 0.50]); // lit window
 }
 
 // Clouds: low-poly puffs — flattened box clusters in warm white. The field is
@@ -231,6 +242,22 @@ export function buildBlob(R, color) {
   return R.makeMesh(b);
 }
 
+// The landing light's beam: a translucent cone from the nose, reaching ahead
+// and down. Drawn only when the world is dark enough for it to matter; the
+// colour sits past 1.0 so it reads as light, not geometry.
+export function buildLightCone(R) {
+  const b = new Builder();
+  const SEG = 10, LEN = 17, RAD = 2.6, DROP = 3.2;
+  const col = [1.25, 1.15, 0.85];
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    const p0 = [Math.cos(a0) * RAD, -DROP + Math.sin(a0) * RAD, -LEN];
+    const p1 = [Math.cos(a1) * RAD, -DROP + Math.sin(a1) * RAD, -LEN];
+    b.tri([0, 0, 0], p1, p0, col);
+  }
+  return R.makeMesh(b);
+}
+
 // The scene keeps a spring-smoothed chase camera so the plane eases through
 // the frame instead of snapping with every input twitch.
 export function createScene(R, assets) {
@@ -267,8 +294,10 @@ export function createScene(R, assets) {
     }
     const view = M4.lookAt(eye, target, [0, 1, 0]);
     R.setCamera(view, projCache.m, eye);
+    // The clock's environment drives every light in the frame.
+    if (st.env) R.setEnv(st.env);
     R.begin();
-    R.drawSky(assets.sky);
+    R.drawSky(assets.sky, st.time);
     // Sea follows the camera in whole cells so the glitter never swims.
     const snap = assets.sea.cell;
     const origin = [Math.round(eye[0] / snap) * snap, 0, Math.round(eye[2] / snap) * snap];
@@ -338,6 +367,13 @@ export function createScene(R, assets) {
       const propM = M4.mul(planeM, M4.compose(0, 0.95, -3.05, 0, 0, st.propSpin));
       R.draw(assets.plane.prop, propM);
       R.draw(assets.plane.disc, propM, 0.16);
+    }
+    // The landing light throws its beam when the world is dark: the cone
+    // hangs off the nose, ahead and down toward the water or the strip.
+    const emis = st.env ? st.env.emis : 0;
+    if (assets.cone && emis > 0.9) {
+      const coneM = M4.compose(st.x, st.alt + 1.1, pz - 2.4, 0, 0, -st.bank * 0.3);
+      R.draw(assets.cone, coneM, clamp((emis - 0.9) / 1.3, 0, 1) * 0.13);
     }
   }
   // Settle the camera instantly (staged screenshots start from a posed frame

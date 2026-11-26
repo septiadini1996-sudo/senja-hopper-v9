@@ -1,6 +1,7 @@
 // Campaign state and its localStorage save. Pure transitions live here so the
 // logic suite can drive them; the DOM layer only renders what this returns.
 import { ISLANDS, HOP_M, CUSTOMERS, ringCourse, ringCountFor } from './world.js';
+import { weatherAtHour } from './clock.js';
 import { mulberry32 } from './util.js';
 
 export const SAVE_KEY = 'senja-hopper-save-v9';
@@ -14,7 +15,7 @@ export const CHALLENGES = [
 
 export function defaultSave() {
   return {
-    saldo: 50000, day: 1, islandIdx: 0, stamps: [],
+    saldo: 50000, day: 1, clockH: 6.5, islandIdx: 0, stamps: [],
     upgrades: { engine: 1, fuel: 1, hull: 1 },
     stats: { flights: 0, deliveries: 0, rings: 0, earned: 0, bestGrade: null },
     challengesDone: [],
@@ -57,8 +58,6 @@ export function morningBoard(save, daySeed) {
       pay: Math.round((26000 + dist * 26) / 100) * 100,
       // The salt keeps two jobs on the same hop from sharing one ring course.
       rings: ringCourse(dist, ringCountFor(dist), 5000 + from * 131 + to * 17 + daySeed + tickets.length * 977),
-      // Roughly one job in five is a storm run: rain, thick fog, hard wind.
-      weather: rnd() < 0.22 ? 'storm' : 'clear',
     };
   };
   if (save.islandIdx < ISLANDS.length - 1) tickets.push(mk(save.islandIdx, save.islandIdx + 1, true));
@@ -74,6 +73,17 @@ export function morningBoard(save, daySeed) {
     if (tickets.some(tk => tk.from === from && tk.to === to && tk.customer === cand.customer)) continue;
     tickets.push(cand);
   }
+  // Departures spread across the day — dawn, mid-morning, midday, afternoon,
+  // senja, night — three slots a third of the day apart, rotated by the day
+  // seed. Each ticket's weather is the clock table's word for its departure
+  // hour: the forecast printed on the board is the sky the flight will get.
+  const SLOTS = [5.75, 8.25, 10.75, 13.25, 15.75, 18.25, 20.75, 23.0];
+  const wrnd = mulberry32(daySeed * 104729 + 7);
+  const start = Math.floor(wrnd() * SLOTS.length);
+  tickets.forEach((tk, i) => {
+    tk.depHour = SLOTS[(start + i * 3) % SLOTS.length];
+    tk.weather = weatherAtHour(daySeed, Math.floor(tk.depHour));
+  });
   return tickets;
 }
 

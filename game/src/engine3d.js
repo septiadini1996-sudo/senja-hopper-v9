@@ -105,12 +105,17 @@ void main(){ vNor = mat3(uModel) * aNor; vCol = aCol;
   gl_Position = uMVP * vec4(aPos, 1.0); }`;
 const LIT_FS = `#version 300 es
 precision mediump float;
-uniform vec3 uSun; uniform vec3 uFog; uniform float uFogD; uniform float uAlpha;
+uniform vec3 uSun; uniform vec3 uSunCol; uniform float uSunI;
+uniform vec3 uAmbLo; uniform vec3 uAmbHi; uniform float uEmis;
+uniform vec3 uFog; uniform float uFogD; uniform float uAlpha;
 in vec3 vNor; in vec3 vCol; in float vDepth; out vec4 o;
 void main(){ vec3 n = normalize(vNor);
   float diff = max(dot(n, uSun), 0.0);
-  vec3 amb = mix(vec3(0.36,0.24,0.30), vec3(0.55,0.48,0.44), n.y * 0.5 + 0.5);
-  vec3 c = vCol * (amb + vec3(1.0,0.82,0.62) * diff * 0.85);
+  vec3 amb = mix(uAmbLo, uAmbHi, n.y * 0.5 + 0.5);
+  vec3 c = vCol * (amb + uSunCol * diff * uSunI);
+  // Vertex colours pushed past 1.0 are lamps, lit windows and nav lights:
+  // the excess is emissive, and it blooms as the world's light falls.
+  c += max(vCol - vec3(1.0), vec3(0.0)) * uEmis;
   float f = 1.0 - exp(-uFogD * uFogD * vDepth * vDepth);
   o = vec4(mix(c, uFog, clamp(f,0.0,1.0)), uAlpha); }`;
 const SEA_VS = `#version 300 es
@@ -121,13 +126,14 @@ void main(){ vec3 w = aPos + uOrigin; vWorld = w; gl_Position = uMVP * vec4(w, 1
 const SEA_FS = `#version 300 es
 precision mediump float;
 uniform vec3 uSun; uniform vec3 uCam; uniform float uTime; uniform vec3 uFog; uniform float uFogD;
+uniform vec3 uDeep; uniform vec3 uLift; uniform vec3 uSparkle; uniform float uGlitter;
+uniform vec3 uSheen; uniform float uSheenI;
 in vec3 vWorld; out vec4 o;
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main(){
   vec3 V = normalize(uCam - vWorld);
   float dist = length(uCam - vWorld);
-  vec3 deep = vec3(0.05, 0.23, 0.33); vec3 lift = vec3(0.13, 0.45, 0.55);
-  vec3 c = mix(lift, deep, clamp(dist / 900.0, 0.0, 1.0));
+  vec3 c = mix(uLift, uDeep, clamp(dist / 900.0, 0.0, 1.0));
   // Sun glitter: sparkle cells that shimmer, gathered into a streak under the
   // sun. The cells are world-sized, so the surface streams past under the
   // plane and its scale reads against altitude; sparkle fades with range so
@@ -137,9 +143,9 @@ void main(){
   float sparkle = step(0.965, tw) * exp(-dist / 620.0);
   vec3 toP = normalize(vWorld - uCam);
   float streak = pow(max(dot(toP.xz, normalize(uSun.xz)), 0.0), 18.0);
-  c += vec3(1.0, 0.75, 0.42) * sparkle * (0.25 + streak * 1.6);
+  c += uSparkle * sparkle * (0.25 + streak * 1.6) * uGlitter;
   float fres = pow(1.0 - max(V.y, 0.0), 2.0);
-  c += vec3(0.98, 0.55, 0.30) * fres * 0.35; // sunset sheen at grazing angles
+  c += uSheen * fres * uSheenI; // light sheen at grazing angles
   float f = 1.0 - exp(-uFogD * uFogD * dist * dist);
   o = vec4(mix(c, uFog, clamp(f, 0.0, 1.0)), 1.0); }`;
 const SKY_VS = `#version 300 es
@@ -149,15 +155,26 @@ out vec3 vDir;
 void main(){ vDir = aPos; vec4 p = uMVP * vec4(aPos, 1.0); gl_Position = p.xyww; }`;
 const SKY_FS = `#version 300 es
 precision mediump float;
-uniform vec3 uSun;
+uniform vec3 uSun; uniform vec3 uLow; uniform vec3 uMid; uniform vec3 uTop;
+uniform vec3 uDiscCol; uniform vec3 uHaloCol; uniform float uDiscI;
+uniform float uStars; uniform float uTime;
 in vec3 vDir; out vec4 o;
 void main(){ vec3 d = normalize(vDir);
   float h = clamp(d.y, -0.08, 1.0);
-  vec3 c = mix(vec3(1.0, 0.62, 0.34), vec3(0.98, 0.78, 0.52), smoothstep(0.0, 0.22, h));
-  c = mix(c, vec3(0.36, 0.42, 0.66), smoothstep(0.18, 0.75, h));
-  float sun = pow(max(dot(d, uSun), 0.0), 220.0);
-  float halo = pow(max(dot(d, uSun), 0.0), 7.0);
-  c += vec3(1.0, 0.83, 0.55) * sun * 1.4 + vec3(1.0, 0.6, 0.3) * halo * 0.28;
+  vec3 c = mix(uLow, uMid, smoothstep(0.0, 0.22, h));
+  c = mix(c, uTop, smoothstep(0.18, 0.75, h));
+  float sd = max(dot(d, uSun), 0.0);
+  float sun = pow(sd, 220.0);
+  float halo = pow(sd, 7.0);
+  c += uDiscCol * sun * 1.4 * uDiscI + uHaloCol * halo * 0.28 * uDiscI;
+  // Stars: a hashed cell field, only above the horizon, only at night.
+  if (uStars > 0.01) {
+    vec3 cell = floor(d * 130.0);
+    float hs = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float star = step(0.9974, hs) * uStars * smoothstep(0.03, 0.3, d.y);
+    float tw = 0.7 + 0.3 * sin(uTime * 1.7 + hs * 43.7);
+    c += vec3(0.85, 0.92, 1.0) * star * tw;
+  }
   o = vec4(c, 1.0); }`;
 
 export function createRenderer(canvas) {
@@ -186,11 +203,22 @@ function buildRenderer(canvas, gl) {
   }
   const lit = program(LIT_VS, LIT_FS), sea = program(SEA_VS, SEA_FS), sky = program(SKY_VS, SKY_FS);
   const SUN = norm3([-0.35, 0.42, -0.84]); // low sun, ahead-left of the route
+  // The environment: every light the shaders know, in one object the scene
+  // replaces each frame from the game clock (clock.js). It boots at the
+  // senja values so the first frame is the game's original golden hour.
   // Fog is a gradient, not a wall: at 1 km the destination still reads at
   // ~75% strength, so islands and the strip grow out of the haze on approach.
-  // Rain thickens it (setFog) — visibility is a weather readout, not a mood.
-  const FOG = [0.96, 0.62, 0.42];
-  let FOGD = 0.00052;
+  // Weather thickens it — visibility is a weather readout, not a mood.
+  const env = {
+    sunDir: SUN, sunCol: [1.0, 0.82, 0.62], sunI: 0.85,
+    ambLo: [0.36, 0.24, 0.30], ambHi: [0.55, 0.48, 0.44], emis: 0.35,
+    fog: [0.96, 0.62, 0.42], fogD: 0.00052,
+    skyLow: [1.0, 0.62, 0.34], skyMid: [0.98, 0.78, 0.52], skyTop: [0.36, 0.42, 0.66],
+    discCol: [1.0, 0.83, 0.55], haloCol: [1.0, 0.60, 0.30], discI: 1.0, stars: 0,
+    seaDeep: [0.05, 0.23, 0.33], seaLift: [0.13, 0.45, 0.55],
+    sparkle: [1.0, 0.75, 0.42], glitter: 1.0, sheen: [0.98, 0.55, 0.30], sheenI: 0.35,
+  };
+  function setEnv(e) { for (const k of Object.keys(env)) if (e[k] !== undefined) env[k] = e[k]; }
 
   function makeMesh(builder) {
     const vao = gl.createVertexArray();
@@ -227,9 +255,14 @@ function buildRenderer(canvas, gl) {
     gl.uniformMatrix4fv(gl.getUniformLocation(lit, 'uMVP'), false, M4.mul(proj, M4.mul(view, model)));
     gl.uniformMatrix4fv(gl.getUniformLocation(lit, 'uModel'), false, model);
     gl.uniformMatrix4fv(gl.getUniformLocation(lit, 'uView'), false, view);
-    gl.uniform3fv(gl.getUniformLocation(lit, 'uSun'), SUN);
-    gl.uniform3fv(gl.getUniformLocation(lit, 'uFog'), FOG);
-    gl.uniform1f(gl.getUniformLocation(lit, 'uFogD'), FOGD);
+    gl.uniform3fv(gl.getUniformLocation(lit, 'uSun'), env.sunDir);
+    gl.uniform3fv(gl.getUniformLocation(lit, 'uSunCol'), env.sunCol);
+    gl.uniform1f(gl.getUniformLocation(lit, 'uSunI'), env.sunI);
+    gl.uniform3fv(gl.getUniformLocation(lit, 'uAmbLo'), env.ambLo);
+    gl.uniform3fv(gl.getUniformLocation(lit, 'uAmbHi'), env.ambHi);
+    gl.uniform1f(gl.getUniformLocation(lit, 'uEmis'), env.emis);
+    gl.uniform3fv(gl.getUniformLocation(lit, 'uFog'), env.fog);
+    gl.uniform1f(gl.getUniformLocation(lit, 'uFogD'), env.fogD);
     gl.uniform1f(gl.getUniformLocation(lit, 'uAlpha'), alpha);
     if (alpha < 1) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
     gl.bindVertexArray(mesh.vao);
@@ -240,19 +273,33 @@ function buildRenderer(canvas, gl) {
     gl.useProgram(sea);
     gl.uniformMatrix4fv(gl.getUniformLocation(sea, 'uMVP'), false, M4.mul(proj, view));
     gl.uniform3fv(gl.getUniformLocation(sea, 'uOrigin'), origin);
-    gl.uniform3fv(gl.getUniformLocation(sea, 'uSun'), SUN);
+    gl.uniform3fv(gl.getUniformLocation(sea, 'uSun'), env.sunDir);
     gl.uniform3fv(gl.getUniformLocation(sea, 'uCam'), camPos);
     gl.uniform1f(gl.getUniformLocation(sea, 'uTime'), time);
-    gl.uniform3fv(gl.getUniformLocation(sea, 'uFog'), FOG);
-    gl.uniform1f(gl.getUniformLocation(sea, 'uFogD'), FOGD);
+    gl.uniform3fv(gl.getUniformLocation(sea, 'uFog'), env.fog);
+    gl.uniform1f(gl.getUniformLocation(sea, 'uFogD'), env.fogD);
+    gl.uniform3fv(gl.getUniformLocation(sea, 'uDeep'), env.seaDeep);
+    gl.uniform3fv(gl.getUniformLocation(sea, 'uLift'), env.seaLift);
+    gl.uniform3fv(gl.getUniformLocation(sea, 'uSparkle'), env.sparkle);
+    gl.uniform1f(gl.getUniformLocation(sea, 'uGlitter'), env.glitter);
+    gl.uniform3fv(gl.getUniformLocation(sea, 'uSheen'), env.sheen);
+    gl.uniform1f(gl.getUniformLocation(sea, 'uSheenI'), env.sheenI);
     gl.bindVertexArray(mesh.vao);
     gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
   }
-  function drawSky(mesh) {
+  function drawSky(mesh, time = 0) {
     gl.useProgram(sky);
     const v = new Float32Array(view); v[12] = 0; v[13] = 0; v[14] = 0; // rotation only
     gl.uniformMatrix4fv(gl.getUniformLocation(sky, 'uMVP'), false, M4.mul(proj, v));
-    gl.uniform3fv(gl.getUniformLocation(sky, 'uSun'), SUN);
+    gl.uniform3fv(gl.getUniformLocation(sky, 'uSun'), env.sunDir);
+    gl.uniform3fv(gl.getUniformLocation(sky, 'uLow'), env.skyLow);
+    gl.uniform3fv(gl.getUniformLocation(sky, 'uMid'), env.skyMid);
+    gl.uniform3fv(gl.getUniformLocation(sky, 'uTop'), env.skyTop);
+    gl.uniform3fv(gl.getUniformLocation(sky, 'uDiscCol'), env.discCol);
+    gl.uniform3fv(gl.getUniformLocation(sky, 'uHaloCol'), env.haloCol);
+    gl.uniform1f(gl.getUniformLocation(sky, 'uDiscI'), env.discI);
+    gl.uniform1f(gl.getUniformLocation(sky, 'uStars'), env.stars);
+    gl.uniform1f(gl.getUniformLocation(sky, 'uTime'), time);
     gl.bindVertexArray(mesh.vao);
     // The dome is written at depth 1.0 (p.xyww), which a LESS depth test would
     // reject against the cleared buffer — draw it with the test off, first.
@@ -264,10 +311,10 @@ function buildRenderer(canvas, gl) {
   }
   function begin() {
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(FOG[0], FOG[1], FOG[2], 1);
+    gl.clearColor(env.fog[0], env.fog[1], env.fog[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
   }
-  return { gl, canvas, makeMesh, makeRawMesh, setCamera, draw, drawSea, drawSky, begin, SUN,
-    setFog(d) { FOGD = d; }, getFog() { return FOGD; } };
+  return { gl, canvas, makeMesh, makeRawMesh, setCamera, draw, drawSea, drawSky, begin, SUN, setEnv,
+    setFog(d) { env.fogD = d; }, getFog() { return env.fogD; } };
 }
