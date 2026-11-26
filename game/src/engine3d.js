@@ -134,6 +134,11 @@ void main(){
   vec3 V = normalize(uCam - vWorld);
   float dist = length(uCam - vWorld);
   vec3 c = mix(uLift, uDeep, clamp(dist / 900.0, 0.0, 1.0));
+  // Broad wave shading: a slow, large-cell mottling drifting with time,
+  // so the surface carries swells instead of one flat tone between the
+  // sparkles — the sea reads as moving water even where nothing glitters.
+  vec2 swell = floor(vWorld.xz * 0.045 + vec2(uTime * 0.05, uTime * 0.037));
+  c += uLift * (hash(swell) - 0.5) * 0.11;
   // Sun glitter: sparkle cells that shimmer, gathered into a streak under the
   // sun. The cells are world-sized, so the surface streams past under the
   // plane and its scale reads against altitude; sparkle fades with range so
@@ -142,10 +147,17 @@ void main(){
   float tw = hash(cell + floor(uTime * 2.7));
   float sparkle = step(0.965, tw) * exp(-dist / 620.0);
   vec3 toP = normalize(vWorld - uCam);
-  float streak = pow(max(dot(toP.xz, normalize(uSun.xz)), 0.0), 18.0);
+  // Powers by multiplication: pow() is the sea's most expensive habit
+  // and this surface covers half the frame.
+  float sa = max(dot(toP.xz, normalize(uSun.xz)), 0.0);
+  float sa2 = sa * sa, sa4 = sa2 * sa2, sa8 = sa4 * sa4;
+  float streak = sa8 * sa8 * sa2; // sa^18
   c += uSparkle * sparkle * (0.25 + streak * 1.6) * uGlitter;
-  float fres = pow(1.0 - max(V.y, 0.0), 2.0);
-  c += uSheen * fres * uSheenI; // light sheen at grazing angles
+  // A wide, soft sun path under the glitter streak: the whole lane toward
+  // the sun lifts a little, so the glitter sits in a lit road of water.
+  c += uSheen * (sa4 * sa) * 0.13 * uGlitter; // sa^5
+  float fr = 1.0 - max(V.y, 0.0);
+  c += uSheen * (fr * fr) * uSheenI; // light sheen at grazing angles
   float f = 1.0 - exp(-uFogD * uFogD * dist * dist);
   o = vec4(mix(c, uFog, clamp(f, 0.0, 1.0)), 1.0); }`;
 const SKY_VS = `#version 300 es
@@ -161,12 +173,19 @@ uniform float uStars; uniform float uTime;
 in vec3 vDir; out vec4 o;
 void main(){ vec3 d = normalize(vDir);
   float h = clamp(d.y, -0.08, 1.0);
-  vec3 c = mix(uLow, uMid, smoothstep(0.0, 0.22, h));
-  c = mix(c, uTop, smoothstep(0.18, 0.75, h));
+  // A three-stop gradient with wide, soft shoulders: the horizon colour
+  // blooms a little above the sea line before the mid tone takes over,
+  // and the top deepens gradually instead of arriving in one band.
+  vec3 c = mix(uLow, uMid, smoothstep(-0.02, 0.30, h));
+  c = mix(c, uTop, smoothstep(0.25, 0.85, h));
+  c += uLow * (1.0 - smoothstep(0.0, 0.16, h)) * 0.12; // horizon warmth
   float sd = max(dot(d, uSun), 0.0);
   float sun = pow(sd, 220.0);
   float halo = pow(sd, 7.0);
+  float sd2 = sd * sd, sd4 = sd2 * sd2, sd8 = sd4 * sd4;
   c += uDiscCol * sun * 1.4 * uDiscI + uHaloCol * halo * 0.28 * uDiscI;
+  c += uDiscCol * (sd8 * sd8 * sd8) * 0.16 * uDiscI; // sd^24: the disc's near glow
+  c += uHaloCol * (sd2 * sqrt(sd)) * 0.10 * uDiscI; // sd^2.5: a wide wash around it
   // Stars: a hashed cell field, only above the horizon, only at night.
   if (uStars > 0.01) {
     vec3 cell = floor(d * 130.0);
@@ -315,6 +334,11 @@ function buildRenderer(canvas, gl) {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
   }
-  return { gl, canvas, makeMesh, makeRawMesh, setCamera, draw, drawSea, drawSky, begin, SUN, setEnv,
+  return { gl, canvas, makeMesh, makeRawMesh, setCamera, draw, drawSea, drawSky, begin,
+    // Depth-only clear: the cockpit pass draws its interior in camera
+    // space over the finished world, so the panel can never be buried
+    // behind the plane's own geometry or the sea.
+    clearDepth() { gl.clear(gl.DEPTH_BUFFER_BIT); },
+    SUN, setEnv,
     setFog(d) { env.fogD = d; }, getFog() { return env.fogD; } };
 }

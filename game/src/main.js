@@ -4,7 +4,8 @@
 // writes into ONE normalized frame, so switching schemes mid-flight changes
 // only who is holding the controls — never the flight itself.
 import { createRenderer } from './engine3d.js';
-import { buildPlane, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildStreaks, buildAirport, buildCloud, buildLightCone, cloudField, createScene } from './scene3d.js';
+import { buildPlane, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCockpit, buildLightCone, cloudField, createScene } from './scene3d.js';
+import { cockpitState } from './cockpit.js';
 import { createFlight, stepFlight, settleFlight, guidance, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
 import { ISLANDS, HOP_M, ringCourse } from './world.js';
@@ -722,8 +723,12 @@ if (R) {
     stripGlow: buildStripGlow(R),
     deptStrip: buildDepartureRunway(R),
     deptGlow: buildDepartureGlow(R),
+    homeTerrain: buildHomeTerrain(R),
+    shallows: buildShallows(R),
     airport: buildAirport(R),
     cloud: buildCloud(R),
+    cloudB: buildCloudB(R),
+    cockpit: buildCockpit(R),
     cone: buildLightCone(R),
     streaks: buildStreaks(R),
     shadow: buildBlob(R, [0.03, 0.05, 0.07]),
@@ -739,13 +744,13 @@ const demoRings = ringCourse(HOP_M[0], 5, 42);
 function stageState() {
   if (flightCtx) {
     const f = flightCtx.flight;
-    return { dist: f.dist, x: f.x, alt: f.alt, speed: f.speed, bank: f.bank, pitchVis: f.pitchVis,
+    return { dist: f.dist, x: f.x, alt: f.alt, speed: f.speed, vs: f.vs, bank: f.bank, pitchVis: f.pitchVis,
       rings: f.rings, legDist: f.legDist, time: ambient, propSpin, fx: flightCtx.fx, camMode, env: envNow,
       surface: f.surface, discA: 0.08 + 0.24 * frame.throttle };
   }
   // Title backdrop: the plane under way over open sea, offset so the menu
   // column does not swallow her.
-  return { dist: 500, x: -40, alt: 40 + Math.sin(ambient * 0.5) * 1.2, speed: 32,
+  return { dist: 500, x: -40, alt: 40 + Math.sin(ambient * 0.5) * 1.2, speed: 32, vs: 0,
     bank: 0.14 + Math.sin(ambient * 0.35) * 0.04, pitchVis: 0, rings: demoRings, legDist: HOP_M[0],
     time: ambient, propSpin: ambient * 9, fx: [], camBack: 30, camUp: -2, aimDy: -9.6, env: envNow };
 }
@@ -822,14 +827,22 @@ function advanceClock(dt) {
 function loop(ts) {
   requestAnimationFrame(loop);
   const now = ts / 1000;
-  const dt = Math.min(now - (lastTs || now), 0.1);
+  // The frame clamp is a quarter second, not a tenth (v11): on a slow
+  // renderer the old clamp made the whole game run in slow motion —
+  // the render rate capped the SIM rate, so a struggling device didn't
+  // just drop frames, it dropped game time, and a takeoff roll could
+  // outlast the runway clock. Physics still steps in fixed 1/60 quanta
+  // (identical per-step behaviour at any frame rate); the accumulator
+  // simply gets a big enough budget to keep game time honest down to
+  // ~4 fps. On a healthy 60 fps device nothing changes at all.
+  const dt = Math.min(now - (lastTs || now), 0.25);
   lastTs = now;
   ambient += dt;
   advanceClock(dt);
   if (screen === 'flight' && flightCtx && !paused && !flightCtx.finished && !flightCtx.frozen) {
     acc += dt;
     let guard = 0;
-    while (acc >= STEP && guard++ < 8) { stepOnce(STEP); acc -= STEP; }
+    while (acc >= STEP && guard++ < 16) { stepOnce(STEP); acc -= STEP; }
     updateHud();
   }
   if (flightCtx) { // ring flashes age in real time, even on a frozen stage
@@ -907,6 +920,10 @@ if (shot === 'flight' || shot === 'receipt') {
   const hourP = parseFloat(params.get('hour'));
   if (Number.isFinite(hourP)) save.clockH = ((hourP % 24) + 24) % 24;
   if (params.get('wx')) flightCtx.wxPin = params.get('wx');
+  // &cam= picks the staging camera for ANY flight shot (the cockpit
+  // dossier frame depends on it), not only the posed roll/rotate shots.
+  const camP = params.get('cam');
+  if (camP === 'near' || camP === 'far' || camP === 'cockpit') camMode = camP;
   envNow = skyAt(save.day, save.clockH, flightCtx.wxPin);
   flightCtx.weather = envNow.state;
   const f = flightCtx.flight;
@@ -974,6 +991,9 @@ window.__senja = {
   get paused() { return paused; },
   get gyroStatus() { return gyro.status; },
   get camMode() { return camMode; },
+  // The cockpit as the instruments read it, while the cockpit camera is
+  // active in a flight: layout presence + live gauge/radar values.
+  get cockpit() { return flightCtx && camMode === 'cockpit' ? cockpitState(flightCtx.flight) : null; },
   get handling() { return save.handling || 'assisted'; },
   get throttle() { return frame.throttle; },
   get fog() { return R ? R.getFog() : null; },

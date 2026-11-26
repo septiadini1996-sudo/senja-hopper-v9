@@ -4,6 +4,7 @@
 // sits at z = -distance, the destination island waits at z = -legDist.
 import { Builder, M4, sub3, cross3, norm3 } from './engine3d.js';
 import { mulberry32, clamp, lerp } from './util.js';
+import { PANEL, GAUGES, RADAR, GLASS_PANES, gaugeReadings, radarBlips } from './cockpit.js';
 
 const CREAM = [0.96, 0.86, 0.64], RED = [0.80, 0.22, 0.15], TEAL = [0.09, 0.26, 0.31];
 
@@ -216,11 +217,16 @@ export function buildIsland(R, seed, scale = 1) {
   const rnd = mulberry32(seed);
   const b = new Builder();
   const r = 46 * scale;
+  b.disc(0, 0.10, 0, r * 1.31, 20, FOAM); // the surf line: a pale rim where sea meets beach
   b.disc(0, 0.25, 0, r * 1.22, 18, SAND); // beach apron
   b.cone(0, 0.2, 0, r, 13 * scale, 9, GREEN2);
   b.cone(10 * scale, 0.2, -8 * scale, r * 0.55, 19 * scale, 8, GREEN);
   b.cone(-16 * scale, 0.2, 10 * scale, r * 0.4, 9 * scale, 7, ROCK);
-  const palms = 6 + Math.floor(rnd() * 4);
+  // Rock outcrops standing in the surf at the shore.
+  const ra = rnd() * Math.PI * 2;
+  b.cone(Math.cos(ra) * r * 1.04, 0.05, Math.sin(ra) * r * 1.04, r * 0.15, 2.0 * scale, 6, ROCK);
+  b.cone(Math.cos(ra + 2.4) * r * 1.02, 0.05, Math.sin(ra + 2.4) * r * 1.02, r * 0.10, 1.3 * scale, 6, ROCK);
+  const palms = 8 + Math.floor(rnd() * 5);
   for (let i = 0; i < palms; i++) {
     const a = rnd() * Math.PI * 2, rr = r * (0.45 + rnd() * 0.4);
     palm(b, Math.cos(a) * rr, Math.sin(a) * rr, (3.6 + rnd() * 2.2) * scale, rnd);
@@ -287,9 +293,22 @@ export function buildRingMeshes(R) {
 // exported so tests can check the flight model's landing zone against the
 // geometry the player actually sees.
 export const STRIP_LAYOUT = { width: 27, length: 200, centreZ: 89, topY: 0.02 };
+// The ground the destination strip stands on (v11): a wide sand apron
+// with grass shoulders, so the deck meets LAND at its edges — the same
+// complaint the owner made at the departure end applied here too.
+export const DEST_APRON = { width: 88, length: 264 };
 export function buildStrip(R) {
   const b = new Builder();
-  b.box(0, -0.14, 0, 48, 0.28, 232, [0.76, 0.68, 0.52]); // sand apron: the airfield reads from a kilometre out
+  b.box(0, -0.14, 0, DEST_APRON.width, 0.28, DEST_APRON.length, [0.76, 0.68, 0.52]); // sand apron: the airfield reads from a kilometre out
+  // Grass shoulders flank the pavement the apron's whole length.
+  b.box(-33, 0.02, 0, 38, 0.08, 250, GREEN);
+  b.box(33, 0.02, 0, 38, 0.08, 250, GREEN2);
+  b.box(-33, 0.075, 0, 26, 0.03, 210, [0.30, 0.54, 0.29]); // a mowed inner band
+  b.box(33, 0.075, 0, 26, 0.03, 210, [0.27, 0.50, 0.27]);
+  // Palms frame the apron corners, well clear of the strip itself.
+  const rnd = mulberry32(9182);
+  palm(b, 38, -120, 5.0, rnd); palm(b, -38, -118, 4.5, rnd);
+  palm(b, 38, 122, 4.7, rnd); palm(b, -38, 120, 5.3, rnd);
   b.box(0, -0.26, 0, STRIP_LAYOUT.width, 0.56, STRIP_LAYOUT.length, DECK);
   b.box(-12.6, 0.05, 0, 0.9, 0.07, 196, PAINT);
   b.box(12.6, 0.05, 0, 0.9, 0.07, 196, PAINT);
@@ -393,6 +412,95 @@ export function buildDepartureGlow(R) {
   return R.makeMesh(b);
 }
 
+// The home island (v11): the departure airfield stands ON LAND. The v10
+// runway sat on a 46 m sand slab in open sea — from the pilot's seat the
+// strip read as a pier, and the owner called it: "landasan jangan laut
+// semua". The terrain is data first (discs and cones with heights), so
+// the logic suite can assert the land is really under the airfield and
+// that nothing raised ever buries the pavement: every shape's top stays
+// at or below the deck's top (y 0.01) wherever it crosses the deck
+// footprint, and the raised grass and hills live in the safe zones
+// beside, behind and beyond the strip. The mesh is built from the same
+// table, so what the test measures is what the player sees.
+export const HOME_TERRAIN = {
+  discs: [
+    // The island base: three sand lobes along the runway axis, tops a
+    // few millimetres over the sea and under the deck.
+    { x: 0, z: 95, r: 150, y: 0.004, kind: 'sand' },
+    { x: 0, z: -70, r: 175, y: 0.006, kind: 'sand' },
+    { x: 0, z: -235, r: 140, y: 0.008, kind: 'sand' },
+    // Grass lobes: the island's body, kept out of the strip corridor.
+    { x: -98, z: 55, r: 78, y: 0.016, kind: 'grass' },
+    { x: -100, z: -85, r: 82, y: 0.018, kind: 'grass' },
+    { x: -95, z: -215, r: 72, y: 0.016, kind: 'grass' },
+    { x: 100, z: -60, r: 82, y: 0.018, kind: 'grass' },
+    { x: 98, z: -195, r: 74, y: 0.016, kind: 'grass' },
+    { x: 0, z: -352, r: 88, y: 0.017, kind: 'grass' },
+    { x: -30, z: 195, r: 85, y: 0.017, kind: 'grass' },
+  ],
+  cones: [
+    { x: -150, z: -300, r: 55, h: 15, kind: 'hill' },
+    { x: 150, z: -275, r: 48, h: 11, kind: 'hill' },
+    { x: -145, z: 185, r: 50, h: 9, kind: 'hill' },
+    { x: 120, z: 150, r: 40, h: 6, kind: 'grass' },
+    { x: -70, z: -330, r: 34, h: 4, kind: 'grass' },
+  ],
+};
+// The terrain's top height at a point: the highest shape covering it,
+// or -1 for open sea. Cones stand on a 0.01 base (their skirts meet the
+// sand lobes) and rise linearly to the apex.
+export function terrainHeightAt(x, z) {
+  let top = -1;
+  for (const d of HOME_TERRAIN.discs) {
+    if (Math.hypot(x - d.x, z - d.z) <= d.r) top = Math.max(top, d.y);
+  }
+  for (const c of HOME_TERRAIN.cones) {
+    const dist = Math.hypot(x - c.x, z - c.z);
+    if (dist <= c.r) top = Math.max(top, 0.01 + c.h * (1 - dist / c.r));
+  }
+  return top;
+}
+
+export function buildHomeTerrain(R) {
+  const b = new Builder();
+  const SANDS = [SAND, [0.90, 0.74, 0.48], SAND];
+  const GREENS = [GREEN, GREEN2, [0.30, 0.54, 0.29]];
+  let si = 0, gi = 0;
+  for (const d of HOME_TERRAIN.discs) {
+    b.disc(d.x, d.y, d.z, d.r, 30, d.kind === 'sand' ? SANDS[si++ % SANDS.length] : GREENS[gi++ % GREENS.length]);
+  }
+  for (const c of HOME_TERRAIN.cones) {
+    b.cone(c.x, 0.01, c.z, c.r, c.h, 10, c.kind === 'hill' ? [0.36, 0.46, 0.30] : GREEN2);
+  }
+  // Palms dress the grass lobes — never the corridor, never the apron.
+  const rnd = mulberry32(4242);
+  for (const [x, z, h] of [[-120, 30, 4.6], [-80, -160, 5.4], [-130, -240, 4.2], [120, -120, 5.0],
+    [80, -230, 4.4], [130, 40, 5.6], [-60, -350, 4.8], [40, -375, 4.1], [-160, 120, 5.2],
+    [150, 175, 4.5], [-45, 235, 5.0], [95, 215, 4.3], [165, -320, 5.3], [-185, -60, 4.7]]) {
+    palm(b, x, z, h, rnd);
+  }
+  // Rock outcrops where the lobes meet the sea.
+  b.cone(170, 0.02, -50, 9, 2.6, 6, ROCK);
+  b.cone(-178, 0.02, -160, 11, 3.4, 6, ROCK);
+  b.cone(-60, 0.02, -415, 10, 3.0, 6, ROCK);
+  return R.makeMesh(b);
+}
+
+// The shallow-water shelf around an island group: pale aqua discs a
+// hair over the sea, drawn translucent — the water lightens toward the
+// shore the way a real lagoon shallows, so land announces itself before
+// the beach arrives. One mesh serves both the home island (at the
+// origin) and the destination (offset to its island).
+export function buildShallows(R) {
+  const b = new Builder();
+  const AQUA = [0.40, 0.76, 0.72];
+  b.disc(0, 0.0015, 95, 172, 30, AQUA);
+  b.disc(0, 0.0015, -70, 196, 30, AQUA);
+  b.disc(0, 0.0015, -235, 164, 30, AQUA);
+  b.disc(0, 0.0015, -352, 110, 30, AQUA);
+  return R.makeMesh(b);
+}
+
 // Terminal, tower and hangars for an airport, local origin at the runway's
 // far end, buildings standing on the shore to the +X side.
 export function buildAirport(R) {
@@ -403,13 +511,22 @@ export function buildAirport(R) {
   b.box(34, 6.6, -6, 22, 1.2, 11, ROOF);
   b.box(34, 3.4, -11.2, 14, 2.6, 0.6, GLASS); // terminal windows
   for (const wx of [28.5, 34, 39.5]) b.box(wx, 3.2, -11.55, 2.6, 1.7, 0.18, WIN); // lit panes over the glass
+  for (const wz of [-9, -6, -3]) b.box(44.15, 3.4, wz, 0.18, 1.6, 2.2, WIN); // lit panes on the flank too
   b.box(46, 7.5, 8, 3.2, 15, 3.2, WALL); // tower shaft
   b.box(46, 15.8, 8, 5.4, 2.4, 5.4, GLASS); // tower cab
   b.box(46, 15.8, 5.2, 4.6, 1.8, 0.3, WIN); // the cab's lit face, watching the strip
   b.box(46, 17.4, 8, 6, 0.8, 6, ROOF);
+  b.box(46, 18.1, 8, 0.55, 0.55, 0.55, [2.3, 0.35, 0.30]); // the tower beacon, burning red
   b.box(24, 2.5, 16, 12, 5, 8, [0.55, 0.58, 0.62]); // hangar
   b.cone(24, 5, 16, 6.4, 2.2, 4, ROOF);
+  b.box(16, 1.7, 31, 8, 3.4, 6, [0.60, 0.62, 0.66]); // a second, smaller hangar
+  b.cone(16, 3.4, 31, 4.6, 1.6, 4, ROOF);
   b.box(40, 1.8, 24, 8, 3.6, 6, WALL); // cargo shed
+  // Freight waiting on the apron: crates and fuel drums by the shed.
+  b.box(37.5, 0.55, 29.5, 1.1, 1.1, 1.1, [0.62, 0.52, 0.38]);
+  b.box(38.8, 0.45, 29.8, 0.9, 0.9, 0.9, [0.55, 0.45, 0.33]);
+  b.box(37.9, 1.45, 29.6, 0.8, 0.7, 0.8, [0.58, 0.48, 0.35]);
+  for (const [dx, dz] of [[0, 0], [0.75, 0.3], [0.3, 0.8]]) b.box(33.5 + dx, 0.5, 28.5 + dz, 0.55, 1.0, 0.55, [0.45, 0.50, 0.55]);
   // A service road ties the buildings together and spurs to the strip's
   // edge; a fuel van waits by the terminal. Ground life, cheaply.
   b.box(19, 0.045, 8, 6, 0.09, 64, [0.30, 0.30, 0.33]);
@@ -423,7 +540,18 @@ export function buildAirport(R) {
 // island meshes so every shore carries its settlement.
 function house(b, x, z, s, rnd) {
   const wall = [0.90, 0.82, 0.66], roof = [0.60 + rnd() * 0.15, 0.24, 0.13];
-  if (rnd() < 0.3) {
+  const v = rnd();
+  if (v < 0.22) {
+    // The shop: a flat canopy awning over a wide lit front — the
+    // settlement's one commercial silhouette among the homes.
+    b.box(x, 1.15 * s, z, 3.6 * s, 2.3 * s, 2.8 * s, wall);
+    b.box(x, 2.42 * s, z, 3.9 * s, 0.22 * s, 3.1 * s, [0.45, 0.38, 0.32]);
+    b.box(x, 1.95 * s, z - 1.75 * s, 3.8 * s, 0.14 * s, 1.15 * s, roof); // awning
+    b.box(x - 0.7 * s, 1.15 * s, z - 1.44 * s, 1.7 * s, 1.1 * s, 0.1, [1.30, 1.02, 0.50]); // lit shopfront
+    b.box(x + 1.15 * s, 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
+    return;
+  }
+  if (v < 0.48) {
     // The two-storey variant: taller walls, a flat slab roof with a
     // parapet lip, and a lit window on each floor.
     b.box(x, 1.7 * s, z, 3.2 * s, 3.4 * s, 2.8 * s, wall);
@@ -451,25 +579,47 @@ export function cloudField(legDist) {
       x: nearRoute ? (rnd() * 2 - 1) * 26 : (rnd() < 0.5 ? -1 : 1) * (55 + rnd() * 175),
       y: 46 + rnd() * 52,
       z: -legDist * (0.1 + 0.85 * (i + rnd() * 0.7) / 9),
-      s: 0.8 + rnd() * 1.1,
+      s: 0.8 + rnd() * 1.5,
+      v: i % 2, // two silhouettes alternate down the route
     });
   }
   return out;
 }
+// Baked cloud shading: sunlit crowns, cooler shadowed undersides — the
+// lit shader multiplies these by the phase light, so a cloud at senja
+// glows amber on top and sinks violet below without any keyframe change.
+const CLOUD_SHADE = { top: [1.16, 1.12, 1.05], bottom: [0.78, 0.82, 0.89] };
 export function buildCloud(R) {
   const b = new Builder();
   const W = [1.06, 1.02, 0.97];
-  // A flatter base slab, puffs stacked into a crown, and baked shading —
-  // sunlit tops, a cooler shadowed underside — so a cloud reads as a
-  // shaped mass instead of a pile of identical boxes.
-  const shade = { top: [1.14, 1.10, 1.03], bottom: [0.80, 0.84, 0.90] };
-  b.box(0, 0, 0, 16, 1.7, 6.6, W, shade);
-  b.box(-4.4, 1.15, 0.3, 7.4, 1.9, 5.4, W, shade);
-  b.box(3.6, 1.35, -0.3, 8.2, 2.3, 5.8, W, shade);
-  b.box(0.4, 2.25, 0.1, 5.6, 1.8, 4.6, W, shade);
-  b.box(-7.8, 0.55, -0.6, 4.8, 1.2, 4.2, W, shade);
-  b.box(8.0, 0.5, 0.7, 5.0, 1.1, 4.0, W, shade);
-  b.box(1.8, 0.9, 2.4, 5.2, 1.3, 3.2, W, shade);
+  // A wide flat base, puffs stacked into a crown, wisps trailing at the
+  // edges — a shaped mass with a silhouette, not a pile of boxes.
+  b.box(0, 0, 0, 18, 1.6, 7.0, W, CLOUD_SHADE);
+  b.box(-5.2, 1.2, 0.3, 8.0, 2.0, 5.6, W, CLOUD_SHADE);
+  b.box(3.8, 1.5, -0.3, 8.6, 2.4, 6.0, W, CLOUD_SHADE);
+  b.box(0.2, 2.5, 0.1, 6.0, 1.9, 4.8, W, CLOUD_SHADE);
+  b.box(0.6, 3.35, 0, 3.6, 1.4, 3.4, W, CLOUD_SHADE);
+  b.box(-8.6, 0.6, -0.6, 5.0, 1.2, 4.4, W, CLOUD_SHADE);
+  b.box(8.8, 0.55, 0.7, 5.4, 1.1, 4.2, W, CLOUD_SHADE);
+  b.box(1.6, 1.0, 2.6, 5.6, 1.3, 3.2, W, CLOUD_SHADE);
+  b.box(-2.8, 0.9, -2.5, 5.0, 1.2, 3.0, W, CLOUD_SHADE);
+  b.box(-11.5, 0.25, -0.4, 4.4, 0.8, 3.4, W, CLOUD_SHADE); // trailing wisps
+  b.box(12.0, 0.3, 0.4, 4.0, 0.8, 3.0, W, CLOUD_SHADE);
+  return R.makeMesh(b);
+}
+export function buildCloudB(R) {
+  const b = new Builder();
+  const W = [1.04, 1.01, 0.97];
+  // The tower silhouette: a narrower base with the mass stacked high —
+  // a cumulus turret, so the route's clouds vary in kind, not just size.
+  b.box(0, 0, 0, 13, 1.7, 6.2, W, CLOUD_SHADE);
+  b.box(-0.4, 1.6, 0.2, 7.2, 2.2, 5.2, W, CLOUD_SHADE);
+  b.box(-0.6, 3.2, 0, 5.4, 2.0, 4.4, W, CLOUD_SHADE);
+  b.box(0.3, 4.6, -0.2, 3.8, 1.6, 3.4, W, CLOUD_SHADE);
+  b.box(-6.4, 0.9, -0.4, 5.6, 1.5, 4.2, W, CLOUD_SHADE);
+  b.box(6.2, 0.8, 0.5, 5.2, 1.4, 4.0, W, CLOUD_SHADE);
+  b.box(0.8, 1.1, -2.6, 5.0, 1.3, 3.0, W, CLOUD_SHADE);
+  b.box(2.8, 2.2, 2.2, 4.2, 1.2, 2.8, W, CLOUD_SHADE);
   return R.makeMesh(b);
 }
 
@@ -540,6 +690,110 @@ export function buildLightCone(R) {
   return R.makeMesh(b);
 }
 
+// ---- the cockpit interior (v11) ----
+// The owner asked for a real cockpit in COCKPIT camera mode: "tambah
+// cokpit dari pesawat seperti kaca layar dan radar". The interior is
+// built in CAMERA space (layout in cockpit.js) and drawn as a second
+// pass over the finished world with the depth buffer cleared, so the
+// panel, canopy frame and glass ride exactly with the pilot's eyes and
+// nothing of the airframe can ever block them. Only the needles and the
+// radar blips move per frame; everything else is one static mesh.
+// XY-plane helpers: the panel faces +Z, toward the pilot. (The engine
+// never culls backfaces, so these fans read from the pilot's side.)
+function discXY(b, cx, cy, cz, r, seg, color) {
+  for (let i = 0; i < seg; i++) {
+    const a0 = (i / seg) * Math.PI * 2, a1 = ((i + 1) / seg) * Math.PI * 2;
+    b.tri([cx, cy, cz], [cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, cz], [cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, cz], color);
+  }
+}
+function ringXY(b, cx, cy, cz, rIn, rOut, seg, color) {
+  for (let i = 0; i < seg; i++) {
+    const a0 = (i / seg) * Math.PI * 2, a1 = ((i + 1) / seg) * Math.PI * 2;
+    const p = (a, r) => [cx + Math.cos(a) * r, cy + Math.sin(a) * r, cz];
+    b.quad(p(a0, rOut), p(a1, rOut), p(a1, rIn), p(a0, rIn), color);
+  }
+}
+function tickXY(b, cx, cy, cz, r, ang, len, wid, color) {
+  // A tick at needle-angle `ang` (0 = up, counter-clockwise positive,
+  // matching cockpit.js needleRad): a small quad along that direction.
+  const dx = -Math.sin(ang), dy = Math.cos(ang), px = -dy, py = dx;
+  const c = (rr, off) => [cx + dx * rr + px * off, cy + dy * rr + py * off, cz];
+  b.quad(c(r, -wid), c(r, wid), c(r + len, wid), c(r + len, -wid), color);
+}
+
+export function buildCockpit(R) {
+  const FRAME = [0.16, 0.13, 0.11], PANELC = [0.09, 0.10, 0.12];
+  const FACE = [0.05, 0.06, 0.075], RIM = [0.52, 0.49, 0.44], TICK = [0.92, 0.87, 0.72];
+  const fz = PANEL.z + 0.02; // instrument faces sit a hair proud of the panel
+  const fb = new Builder();
+  // The panel bulkhead and its glare shield.
+  fb.box(0, (PANEL.top + PANEL.bottom) / 2, PANEL.z - 0.09, PANEL.w, PANEL.top - PANEL.bottom, 0.18, PANELC);
+  fb.box(0, PANEL.top + 0.03, PANEL.z + 0.02, PANEL.w + 0.15, 0.09, 0.30, FRAME);
+  // Canopy frame: two slanted pillars, a top bar, and the rear posts the
+  // side panes hang from. The glass (a separate translucent mesh) fills
+  // the openings; the forward view above the panel stays open.
+  beam(fb, [-1.58, PANEL.top, -2.80], [-1.80, 1.38, -2.80], 0.15, FRAME);
+  beam(fb, [1.58, PANEL.top, -2.80], [1.80, 1.38, -2.80], 0.15, FRAME);
+  beam(fb, [-1.80, 1.38, -2.80], [1.80, 1.38, -2.80], 0.14, FRAME);
+  beam(fb, [2.38, -0.34, -1.50], [2.48, 1.06, -1.50], 0.12, FRAME);
+  beam(fb, [-2.38, -0.34, -1.50], [-2.48, 1.06, -1.50], 0.12, FRAME);
+  // The four dials: dark faces, metal rims, cream ticks at every eighth
+  // of the sweep, a hub each. Needles are separate (they move).
+  for (const g of GAUGES) {
+    discXY(fb, g.x, g.y, fz, g.r, 24, FACE);
+    ringXY(fb, g.x, g.y, fz, g.r - 0.018, g.r + 0.006, 24, RIM);
+    for (let k = 0; k <= 8; k++) tickXY(fb, g.x, g.y, fz + 0.002, g.r * 0.72, (0.75 - 1.5 * (k / 8)) * Math.PI, g.r * 0.20, 0.008, TICK);
+    discXY(fb, g.x, g.y, fz + 0.004, 0.028, 12, RIM);
+  }
+  // The radar scope: a dark green face, a glowing rim and range ring,
+  // cross hairs, and the own-ship wedge at its heart. Blips are separate.
+  discXY(fb, RADAR.x, RADAR.y, RADAR.z, RADAR.r, 28, [0.08, 0.22, 0.13]);
+  ringXY(fb, RADAR.x, RADAR.y, RADAR.z, RADAR.r - 0.016, RADAR.r + 0.004, 28, [0.35, 1.15, 0.55]);
+  ringXY(fb, RADAR.x, RADAR.y, RADAR.z, RADAR.r * 0.52 - 0.006, RADAR.r * 0.52 + 0.006, 28, [0.20, 0.60, 0.32]);
+  fb.quad([RADAR.x - RADAR.r, RADAR.y - 0.004, RADAR.z + 0.002], [RADAR.x + RADAR.r, RADAR.y - 0.004, RADAR.z + 0.002], [RADAR.x + RADAR.r, RADAR.y + 0.004, RADAR.z + 0.002], [RADAR.x - RADAR.r, RADAR.y + 0.004, RADAR.z + 0.002], [0.20, 0.60, 0.32]);
+  fb.quad([RADAR.x - 0.004, RADAR.y - RADAR.r, RADAR.z + 0.002], [RADAR.x + 0.004, RADAR.y - RADAR.r, RADAR.z + 0.002], [RADAR.x + 0.004, RADAR.y + RADAR.r, RADAR.z + 0.002], [RADAR.x - 0.004, RADAR.y + RADAR.r, RADAR.z + 0.002], [0.20, 0.60, 0.32]);
+  fb.tri([RADAR.x, RADAR.y + 0.055, RADAR.z + 0.004], [RADAR.x + 0.042, RADAR.y - 0.038, RADAR.z + 0.004], [RADAR.x - 0.042, RADAR.y - 0.038, RADAR.z + 0.004], [1.45, 1.28, 0.95]);
+  fb.box(RADAR.x, RADAR.y + RADAR.r + 0.035, RADAR.z, 0.05, 0.05, 0.02, [1.45, 1.28, 0.95]); // the N tick
+  const frame = R.makeMesh(fb);
+  // One needle, built pointing up from its hub: the scene rotates it per
+  // gauge per frame from cockpit.js readings.
+  const nb = new Builder();
+  nb.box(0, 0.105, 0, 0.034, 0.25, 0.018, [1.35, 1.25, 1.00]);
+  nb.box(0, -0.045, 0, 0.05, 0.07, 0.018, [0.90, 0.30, 0.20]);
+  const needle = R.makeMesh(nb);
+  // Scope blips: the destination in warm cream, the next ring in gold.
+  const bd = new Builder(); discXY(bd, 0, 0, 0, 0.042, 12, [1.50, 1.35, 1.05]);
+  const br = new Builder(); discXY(br, 0, 0, 0, 0.050, 12, [2.20, 1.70, 0.50]);
+  // The canopy glass: tinted panes from the layout, plus one brighter
+  // reflection streak laid diagonally across the front pane.
+  const gb = new Builder();
+  for (const pane of GLASS_PANES) gb.quad(pane[0], pane[1], pane[2], pane[3], [0.55, 0.70, 0.82]);
+  const glass = R.makeMesh(gb);
+  const sb = new Builder();
+  sb.quad([0.30, 1.30, -2.83], [0.88, 1.30, -2.83], [0.12, -0.46, -2.83], [-0.42, -0.46, -2.83], [1.15, 1.20, 1.25]);
+  const streak = R.makeMesh(sb);
+  return { frame, needle, blipDest: R.makeMesh(bd), blipRing: R.makeMesh(br), glass, streak };
+}
+
+// Draw the cockpit over the finished world: depth cleared, camera set
+// to the identity (the geometry already lives in camera space), needles
+// and blips placed from the live readings, glass last so it tints what
+// is behind it. Called only in cockpit mode, only during a flight.
+function drawCockpit(R, ck, st, proj) {
+  R.clearDepth();
+  R.setCamera(M4.ident(), proj, [0, 0, 0]);
+  R.draw(ck.frame, M4.ident());
+  const rd = gaugeReadings(st);
+  for (const g of GAUGES) {
+    R.draw(ck.needle, M4.compose(g.x, g.y, PANEL.z + 0.035, 0, 0, rd[g.id].needle));
+  }
+  const bl = radarBlips(st);
+  R.draw(ck.blipDest, M4.compose(RADAR.x + bl.dest.nx * RADAR.r, RADAR.y + bl.dest.ny * RADAR.r, RADAR.z + 0.010, 0, 0, 0));
+  if (bl.ring) R.draw(ck.blipRing, M4.compose(RADAR.x + bl.ring.nx * RADAR.r, RADAR.y + bl.ring.ny * RADAR.r, RADAR.z + 0.012, 0, 0, 0));
+  R.draw(ck.glass, M4.ident(), 0.16);
+  R.draw(ck.streak, M4.ident(), 0.10);
+}
+
 // The scene keeps a spring-smoothed chase camera so the plane eases through
 // the frame instead of snapping with every input twitch.
 export function createScene(R, assets) {
@@ -580,10 +834,6 @@ export function createScene(R, assets) {
     if (st.env) R.setEnv(st.env);
     R.begin();
     R.drawSky(assets.sky, st.time);
-    // Sea follows the camera in whole cells so the glitter never swims.
-    const snap = assets.sea.cell;
-    const origin = [Math.round(eye[0] / snap) * snap, 0, Math.round(eye[2] / snap) * snap];
-    R.drawSea(assets.sea.mesh, origin, st.time);
     // Islands: destination ahead, islets scattered en route. The home
     // island and the departure airport's twin are NOT drawn: every camera
     // in this game (chase near/far, cockpit, and the title backdrop)
@@ -596,6 +846,16 @@ export function createScene(R, assets) {
     for (const isl of assets.islets) {
       if (Math.abs(-st.legDist * isl.f - pz) > 1600) continue;
       R.draw(isl.mesh, M4.compose(isl.x, 0, -st.legDist * isl.f, 0, isl.rot, 0, isl.s));
+    }
+    // The home island's land (v11): the terrain the airfield stands on.
+    // Drawn while the departure end can still be in frame — the roll,
+    // the climb-out, the first stretch of the leg — and culled after, on
+    // the engine's standing distance idiom. It is drawn BEFORE the sea
+    // (see the sea note below): the ground writes its depth first, so
+    // the sea's costly fragment work is rejected wherever land covers it
+    // instead of being shaded and then painted over.
+    if (assets.homeTerrain && st.dist < 1000) {
+      R.draw(assets.homeTerrain, M4.compose(0, 0, 0, 0, 0, 0));
     }
     // The departure runway: a paved strip on its own spit at the start of
     // every leg — she lines up on it, rolls it, and climbs out over the
@@ -612,20 +872,37 @@ export function createScene(R, assets) {
     // hides them, and the island's silhouette carries the landmark.
     const stripM = M4.compose(0, 0, -st.legDist + STRIP_LAYOUT.centreZ, 0, 0, 0);
     if (st.legDist - st.dist < 1600) R.draw(assets.strip, stripM);
+    // Airport buildings at the destination runway's far end. (No twin is
+    // drawn at the departure end: like the home island, it would stand
+    // behind every camera for the whole flight.)
+    if (st.legDist - st.dist < 1400) R.draw(assets.airport, M4.compose(0, 0, -st.legDist - 14, 0, 0, 0));
+    // The sea comes AFTER the opaque world (v11 reorder): it follows the
+    // camera in whole cells so the glitter never swims, and wherever
+    // land, strips or buildings already wrote depth, its fragments are
+    // rejected instead of shaded-then-covered — the v11 terrain made the
+    // old sea-first order shade the same pixels two and three times.
+    const snap = assets.sea.cell;
+    const origin = [Math.round(eye[0] / snap) * snap, 0, Math.round(eye[2] / snap) * snap];
+    R.drawSea(assets.sea.mesh, origin, st.time);
+    // The shallow shelves (v11) blend over the sea around both islands;
+    // drawn in the transparent phase, the parts tucked under the terrain
+    // fail the depth test against it and cost nothing.
+    if (assets.shallows && st.dist < 1000) {
+      R.draw(assets.shallows, M4.compose(0, 0, 0, 0, 0, 0), 0.35);
+    }
+    if (assets.shallows && st.legDist - st.dist < 1600) {
+      R.draw(assets.shallows, M4.compose(0, 0, -st.legDist - 72, 0, 0, 0), 0.35);
+    }
     // Her light spill fades in with darkness: by night the lit edges and
     // the threshold halo are the approach's main landmark.
     const dark = darknessOf(st.env);
     if (assets.stripGlow && dark > 0.02 && st.legDist - st.dist < 1600) R.draw(assets.stripGlow, stripM, 0.40 * dark);
     if (assets.deptGlow && dark > 0.02 && st.dist < 550) R.draw(assets.deptGlow, M4.compose(0, 0, 0, 0, 0, 0), 0.40 * dark);
-    // Airport buildings at the destination runway's far end. (No twin is
-    // drawn at the departure end: like the home island, it would stand
-    // behind every camera for the whole flight.)
-    if (st.legDist - st.dist < 1400) R.draw(assets.airport, M4.compose(0, 0, -st.legDist - 14, 0, 0, 0));
     // Clouds at flying altitude along the route.
     if (cloudCache.leg !== st.legDist) cloudCache = { leg: st.legDist, field: cloudField(st.legDist) };
     for (const c of cloudCache.field) {
       if (Math.abs(c.z - pz) > 1000) continue;
-      R.draw(assets.cloud, M4.compose(c.x, c.y, c.z, 0, 0, 0, c.s), 0.88);
+      R.draw(c.v && assets.cloudB ? assets.cloudB : assets.cloud, M4.compose(c.x, c.y, c.z, 0, 0, 0, c.s), 0.88);
     }
     // Rings: the next one bright, the rest gold (fog thins them with range),
     // green once threaded, ghosts once missed. As darkness falls each live
@@ -698,6 +975,12 @@ export function createScene(R, assets) {
     if (assets.cone && emis > 0.9) {
       const coneM = M4.compose(st.x, st.alt + 1.1, pz - 2.4, 0, 0, -st.bank * 0.3);
       R.draw(assets.cone, coneM, clamp((emis - 0.9) / 1.3, 0, 1) * 0.13);
+    }
+    // The cockpit interior (v11): in cockpit mode, during a flight (the
+    // staged title state carries no surface), the pilot's own cockpit —
+    // frame, glass, panel, live needles, radar — is drawn over the world.
+    if (st.camMode === 'cockpit' && assets.cockpit && st.surface !== undefined) {
+      drawCockpit(R, assets.cockpit, st, projCache.m);
     }
   }
   // Settle the camera instantly (staged screenshots start from a posed frame
