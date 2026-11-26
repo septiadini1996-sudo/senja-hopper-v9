@@ -65,15 +65,17 @@ export function gyroButtons(frame, held, dt) {
 // - assisted: pitch/roll/throttle ease toward the raw values (damped), and
 //   with no roll commanded the plane gently steers back toward the route
 //   centreline (self-levelling), proportional to how far off it has drifted.
+//   Pitch eases fastest of the three: a released climb must stop promptly,
+//   or altitude corrections on approach overshoot the strip.
 export function conditionFrame(frame, raw, dt, mode, planeX) {
   if (mode !== 'assisted') {
     frame.pitch = raw.pitch; frame.roll = raw.roll; frame.throttle = raw.throttle;
     return frame;
   }
-  const kp = Math.min(1, dt * 7), kt = Math.min(1, dt * 5);
+  const kp = Math.min(1, dt * 7), kPitch = Math.min(1, dt * 9), kt = Math.min(1, dt * 5);
   let rollTarget = raw.roll;
   if (raw.roll === 0) rollTarget = clamp(-planeX * 0.012, -0.3, 0.3);
-  frame.pitch += (raw.pitch - frame.pitch) * kp;
+  frame.pitch += (raw.pitch - frame.pitch) * kPitch;
   frame.roll += (rollTarget - frame.roll) * kp;
   frame.throttle += (raw.throttle - frame.throttle) * kt;
   return frame;

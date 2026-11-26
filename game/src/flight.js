@@ -7,7 +7,10 @@ export const MAX_SPEED = 89 * KT; // m/s, ~89 knots flat out
 const LIFTOFF = 14.5; // m/s; below this the floats hold her on the water
 const STALL = 11; // m/s; climb authority fades toward the stall
 export const STRIP_HALF = 45; // metres either side of the buoy lane centreline
-export const RING_W = 3.4; // pass-through window: |dAlt| and |dX| in metres
+export const RING_R = 4.4; // pass-through radius in metres: the rendered torus
+// centreline radius (its visible hole is 4.4 - 0.42 tube = 3.98 m across the
+// radius, and the tube itself is the grace beyond it). The scoring circle
+// matches the ring the player sees: a pass through the visible hole counts.
 export const RING_LONG = 7; // longitudinal window in metres
 export const RING_BONUS = 15000;
 export const CENTRE_BONUS = 10000;
@@ -42,7 +45,12 @@ export function stepFlight(s, input, dt) {
   const maxSink = -7.6;
   const wantVs = input.pitch >= 0 ? input.pitch * maxClimb : input.pitch * -maxSink * Math.max(flow, 0.35);
   const prevAlt = s.alt;
-  s.vs = lerp(s.vs, wantVs, clamp(dt * 3.2, 0, 1));
+  // Vertical speed settles faster than it spools up: releasing the stick must
+  // stop a climb promptly (a long float upward after release reads as the
+  // plane ignoring the pilot and ruins approach precision), while the spool
+  // keeps enough lag to feel like weight rather than a switch.
+  const vsRate = Math.abs(wantVs) < Math.abs(s.vs) ? 6.0 : 4.2;
+  s.vs = lerp(s.vs, wantVs, clamp(dt * vsRate, 0, 1));
   if (s.alt <= 0.01 && s.speed < LIFTOFF) s.vs = Math.min(s.vs, 0); // floats hold her down
   if (s.alt <= 0.01 && s.vs < 0) s.vs = 0;
   s.alt = Math.max(0, s.alt + s.vs * dt);
@@ -58,13 +66,16 @@ export function stepFlight(s, input, dt) {
 
   s.dist += s.speed * dt;
 
-  // Rings: a true pass-through needs the plane inside the torus window on all
-  // three axes as it crosses the ring's distance.
+  // Rings: a true pass-through puts the plane inside the torus circle as it
+  // crosses the ring's distance — a radial test in the altitude/lateral
+  // plane, matched to the rendered torus (see RING_R). The old square window
+  // was smaller than the visible hole on-axis, so passes a player could see
+  // were scored as misses.
   for (const r of s.rings) {
     if (r.passed || r.missed) continue;
     const dd = s.dist - r.dist;
     if (Math.abs(dd) <= RING_LONG) {
-      if (Math.abs(s.alt - r.altM) <= RING_W && Math.abs(s.x - r.x) <= RING_W) {
+      if (Math.hypot(s.alt - r.altM, s.x - r.x) <= RING_R) {
         r.passed = true; s.ringsHit++;
       }
     } else if (dd > RING_LONG) r.missed = true;
@@ -131,7 +142,9 @@ export function gradeAtLeast(grade, min) {
 
 // Money: settle a finished flight against a ticket. Pure and testable.
 export function settleFlight(s, ticket, fuelLvl) {
-  const fuelCost = Math.round((s.legDist * 6.2) * (1 - (fuelLvl - 1) * 0.22));
+  // Fuel burns with time aloft as well as distance: over the same hop, a
+  // fast crossing costs less than a slow one.
+  const fuelCost = Math.round((s.legDist * 3.0 + s.t * 110) * (1 - (fuelLvl - 1) * 0.22));
   if (s.outcome === 'taxied') {
     return { lines: [{ k: 'fee', amt: -HARBOUR_FEE }], total: -HARBOUR_FEE, grade: null, delivered: false };
   }
@@ -166,7 +179,7 @@ export function guidance(s) {
     out.mode = 'ring';
     out.dAltFT = Math.round((next.altM - s.alt) / FT);
     out.dX = Math.round(next.x - s.x);
-    out.centred = Math.abs(next.x - s.x) <= RING_W;
+    out.centred = Math.abs(next.x - s.x) <= RING_R;
   } else {
     out.mode = 'done';
   }

@@ -314,8 +314,12 @@ export function createScene(R, assets) {
     }
     // Water shadow: glued to the sea under the plane, spreading and softening
     // as she climbs — the gap between plane and shadow IS the altitude cue.
-    const shScale = 1 + st.alt * 0.012;
-    const shAlpha = clamp(0.44 - st.alt * 0.0016, 0.24, 0.44);
+    // It spreads and holds its darkness longer than it used to, so the cue
+    // survives into mid altitude; past that the chase frame's geometry puts
+    // the water below the plane out of view and the sea-glitter scale takes
+    // over as the altitude readout.
+    const shScale = 1 + st.alt * 0.02;
+    const shAlpha = clamp(0.46 - st.alt * 0.0018, 0.30, 0.46);
     R.draw(assets.shadow, M4.compose(st.x, 0.14, pz, 0, 0, 0, shScale), shAlpha);
     if (st.alt < 0.4 && st.speed > 4) {
       R.draw(assets.foam, M4.compose(st.x, 0.16, pz + 2.6, 0, 0, 0, 1 + st.speed * 0.02), clamp(st.speed / 46, 0, 0.5));
@@ -323,11 +327,18 @@ export function createScene(R, assets) {
     // Speed streaks stream behind the floats when she is low and fast.
     const streakA = clamp((st.speed - 16) / 34, 0, 1) * clamp(1 - st.alt / 7, 0, 1) * 0.55;
     if (streakA > 0.02) R.draw(assets.streaks, M4.compose(st.x, 0.18, pz, 0, 0, 0), streakA);
-    const planeM = M4.compose(st.x, st.alt + 0.62, pz, st.pitchVis * 0.38, -st.bank * 0.22, -st.bank * 0.55);
-    R.draw(assets.plane.plane, planeM);
-    const propM = M4.mul(planeM, M4.compose(0, 0.95, -3.05, 0, 0, st.propSpin));
-    R.draw(assets.plane.prop, propM);
-    R.draw(assets.plane.disc, propM, 0.16);
+    // From the pilot's seat the airframe is not drawn: the camera sits where
+    // the pilot's eyes are, and the fuselage/wing around that point would
+    // fill the forward view with dark geometry (the first cockpit framing
+    // stared into the wing strut). The horizon, the rings and the strip are
+    // the cockpit's instruments.
+    if (st.camMode !== 'cockpit') {
+      const planeM = M4.compose(st.x, st.alt + 0.62, pz, st.pitchVis * 0.38, -st.bank * 0.22, -st.bank * 0.55);
+      R.draw(assets.plane.plane, planeM);
+      const propM = M4.mul(planeM, M4.compose(0, 0.95, -3.05, 0, 0, st.propSpin));
+      R.draw(assets.plane.prop, propM);
+      R.draw(assets.plane.disc, propM, 0.16);
+    }
   }
   // Settle the camera instantly (staged screenshots start from a posed frame
   // instead of waiting for the spring to converge).
