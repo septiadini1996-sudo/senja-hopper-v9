@@ -66,7 +66,7 @@ export function createFlight(opts) {
     // gate), with the smoothness ledger passenger work is graded on.
     speedMul: opts.speedMul || 1, climbMul: opts.climbMul || 1,
     accelMul: opts.accelMul || 1, // ground-roll character (the big jet spools long)
-    respMul: opts.respMul || 1, assist: !!opts.assist,
+    respMul: opts.respMul || 1, assist: !!opts.assist, assistFade: 0,
     pickup: opts.pickup ? { ...opts.pickup } : null, pickedUp: false,
     gate: opts.gate ? { ...opts.gate, passed: false, missed: false } : null,
     photoTaken: false, rough: 0, stalled: false, exploded: false,
@@ -102,7 +102,18 @@ export function stepFlight(s, input, dt) {
   const lift = clamp((s.speed / LIFT_REF) ** 2, 0, 1);
   s.stalled = !onGround && s.speed < STALL;
   if (s.stalled && wantVs > 0) wantVs *= 0.3;
-  if (!onGround) wantVs += -SINK_MAX * (1 - lift) * (s.assist ? 0.72 : 1);
+  // The assist fade: ASSISTED's 0.72 damping is a hands-off kindness, not
+  // a veto over the pilot. Hold the stick at the nose-down stop and the
+  // damping yields over about a second until the sink runs at the full
+  // direct rate — a deliberate power-off dive reaches the surface in the
+  // default mode too, and the crash (and its fireball) can happen. Relax
+  // the stick and the damping comes back twice as fast as it left.
+  if (s.assist) {
+    if (!onGround && input.pitch <= -0.9) s.assistFade = Math.min(1, (s.assistFade || 0) + dt / 1.2);
+    else s.assistFade = Math.max(0, (s.assistFade || 0) - dt / 0.6);
+  }
+  const assistDamp = s.assist ? lerp(0.72, 1, s.assistFade || 0) : 1;
+  if (!onGround) wantVs += -SINK_MAX * (1 - lift) * assistDamp;
   const prevAlt = s.alt;
   // Vertical speed settles faster than it spools up: releasing the stick must
   // stop a climb promptly (a long float upward after release reads as the
@@ -110,12 +121,16 @@ export function stepFlight(s, input, dt) {
   // keeps enough lag to feel like weight rather than a switch.
   const vsRate = (Math.abs(wantVs) < Math.abs(s.vs) ? 6.0 : 4.2) * s.respMul;
   s.vs = lerp(s.vs, wantVs, clamp(dt * vsRate, 0, 1));
-  if (s.alt <= 0.01 && s.speed < LIFTOFF) s.vs = Math.min(s.vs, 0); // floats hold her down
-  if (s.alt <= 0.01 && s.vs < 0) s.vs = 0;
   // A hard arrival on the water, well short of the strip, ends the flight
   // where it happens: she does not bounce off a stall and taxi on. A
   // gentle touch (a proper flare's sink rate or softer) still settles
   // onto the surface and can fly off again, exactly as before.
+  // The impact test reads the sink she ARRIVES with, so it runs before
+  // the ground clamps below: a damped ASSISTED arrival's last stride can
+  // land inside the clamps' 0.01 m band, and with the clamps first they
+  // zeroed her sink before this test ever saw it — she parked at 5 mm,
+  // airborne forever, no outcome, no crash. The clamps still run before
+  // the altitude integrates, so a gentle settle is unchanged.
   if (s.airborne && s.alt + s.vs * dt <= 0 && s.vs < CRASH_SINK && s.dist < s.legDist - 40) {
     s.alt = 0;
     s.done = true;
@@ -124,6 +139,8 @@ export function stepFlight(s, input, dt) {
     s.exploded = crashExplodes(s); // a plunge from height bursts; a ditch does not
     return s;
   }
+  if (s.alt <= 0.01 && s.speed < LIFTOFF) s.vs = Math.min(s.vs, 0); // floats hold her down
+  if (s.alt <= 0.01 && s.vs < 0) s.vs = 0;
   s.alt = Math.max(0, s.alt + s.vs * dt);
   if (s.alt > 0.05 && !s.airborne) {
     s.airborne = true;
