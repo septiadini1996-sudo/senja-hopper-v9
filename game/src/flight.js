@@ -180,8 +180,14 @@ export function guidance(s) {
     out.dAltFT = Math.round((next.altM - s.alt) / FT);
     out.dX = Math.round(next.x - s.x);
     out.centred = Math.abs(next.x - s.x) <= RING_R;
+  } else if (s.rings.length > 0 && s.ringsHit >= s.rings.length) {
+    out.mode = 'done'; // every ring threaded — and ONLY then
   } else {
-    out.mode = 'done';
+    // No live ring ahead, but not all collected: the rest were missed (or
+    // the course has none). The old code fell through to 'done' here, so a
+    // water taxi that rolled past every ring plane unread announced
+    // "ALL RINGS DONE" at 0/5. Head for the strip instead.
+    out.mode = 'none';
   }
   out.tooFast = s.speed > 86 * KT;
   return out;

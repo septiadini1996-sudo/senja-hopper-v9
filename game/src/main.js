@@ -4,9 +4,9 @@
 // writes into ONE normalized frame, so switching schemes mid-flight changes
 // only who is holding the controls — never the flight itself.
 import { createRenderer } from './engine3d.js';
-import { buildPlane, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStreaks, buildAirport, buildCloud, buildLightCone, cloudField, createScene } from './scene3d.js';
+import { buildPlane, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildStreaks, buildAirport, buildCloud, buildLightCone, cloudField, createScene } from './scene3d.js';
 import { createFlight, stepFlight, settleFlight, guidance } from './flight.js';
-import { GAME_HOUR_SECONDS, skyAt, weatherAtHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
+import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
 import { ISLANDS, HOP_M, ringCourse } from './world.js';
 import { loadSave, storeSave, defaultSave, morningBoard, applyResult, challengeResult, windForSeason, UPGRADE_COST, CHALLENGES, SAVE_KEY } from './state.js';
 import { makeT } from './i18n.js';
@@ -81,7 +81,7 @@ function chipsRow() {
   row.append(
     chip(`${t('day')} ${save.day}`), chip(`${t('island')}: ${ISLANDS[save.islandIdx].name}`),
     chip(`${t('saldo')}: <b>${fmtRp(save.saldo)}</b>`), chip(`✦ ${save.stamps.length}/${ISLANDS.length - 1}`),
-    chip(`🕐 <b>${fmtGameHour(save.clockH)}</b> ${wxIcon(weatherAtHour(save.day, Math.floor(save.clockH)))}`),
+    chip(`🕐 <b class="clockface">${fmtGameHour(save.clockH)}</b> <span class="wxface">${wxIcon(weatherAtBlock(save.day, blockOfHour(save.clockH)))}</span>`),
   );
   const obj = el('div', 'objline', save.islandIdx < ISLANDS.length - 1
     ? t('next_obj', { island: dest.name }) : t('all_stamps'));
@@ -610,7 +610,8 @@ function updateHud() {
       : g.dAltFT > 0 ? t('guide_ring_up', { n: g.dAltFT }) : t('guide_ring_down', { n: -g.dAltFT });
     const line = g.centred ? t('guide_centred') : t('guide_line', { n: (g.dX > 0 ? '+' : '') + g.dX });
     guide.textContent = `${alt} · ${line}`;
-  } else guide.textContent = t('guide_none');
+  } else if (g.mode === 'done') guide.textContent = t('guide_none');
+  else guide.textContent = t('guide_head');
   // The overspeed warning exists for the approach, where speed is a landing
   // problem — at ring altitude, full throttle is the correct answer and the
   // warning would only cry wolf.
@@ -717,6 +718,7 @@ if (R) {
     sky: buildSkyMesh(R),
     buoys: buildBuoys(R),
     strip: buildStrip(R),
+    stripGlow: buildStripGlow(R),
     airport: buildAirport(R),
     cloud: buildCloud(R),
     cone: buildLightCone(R),
@@ -787,6 +789,20 @@ function stepOnce(dt) {
   if (!g.tooFast) warned = false;
   if (f.done) finishFlight();
 }
+// The menu clock chip is rendered once per screen, so its text must be
+// refreshed as the clock runs — the value advanced all along, but the
+// board's baked-in "06:30" never moved (the gate watched it for 65 s).
+// Refresh every live clock face whenever the displayed minute changes.
+let lastClockFace = '';
+function refreshClockFaces() {
+  const face = fmtGameHour(save.clockH);
+  if (face === lastClockFace) return;
+  lastClockFace = face;
+  const icon = wxIcon(weatherAtBlock(save.day, blockOfHour(save.clockH)));
+  for (const e of document.querySelectorAll('.clockface')) e.textContent = face;
+  for (const e of document.querySelectorAll('.wxface')) e.textContent = icon;
+}
+
 // The game clock: one game hour per GAME_HOUR_SECONDS of unpaused play.
 // It runs on menus too — the title's sky lives — and the environment is
 // recomputed from it every frame, so light and weather never pop.
@@ -797,6 +813,7 @@ function advanceClock(dt) {
   if (Math.floor(save.clockH) !== prevHour) storeSave(store, save);
   envNow = skyAt(save.day, save.clockH, flightCtx ? flightCtx.wxPin : null);
   if (flightCtx) flightCtx.weather = envNow.state;
+  refreshClockFaces();
 }
 function loop(ts) {
   requestAnimationFrame(loop);

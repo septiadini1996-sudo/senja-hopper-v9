@@ -2,9 +2,9 @@
 // Time runs compressed — one game hour per GAME_HOUR_SECONDS of real play —
 // and everything the sky does is a smooth function of the game hour: sun and
 // moon position, sky gradient, fog, sea tone, starlight. Weather is a
-// separate deterministic table over (campaign day, hour): the same day at
-// the same hour always brings the same sky, so the morning board's forecast
-// is a promise the flight keeps.
+// separate deterministic table over (campaign day, 4-hour block): a block
+// of hours shares one sky, so a day has weather character that lasts and
+// the morning board's forecast is a promise a whole leg can fly inside.
 import { mulberry32, clamp, lerp } from './util.js';
 
 export const GAME_HOUR_SECONDS = 30; // real seconds per game hour (a day ≈ 12 min)
@@ -145,8 +145,10 @@ export function phaseAt(hour) {
   return out;
 }
 
-// ---- weather: a deterministic table over (day, hour) ----
+// ---- weather: a deterministic table over (day, 4-hour block) ----
 export const WEATHERS = ['clear', 'overcast', 'rain', 'storm'];
+export const BLOCK_HOURS = 4; // one weather per block: 00–04, 04–08, …, 20–24
+export const blockOfHour = hourFloat => Math.floor((((hourFloat % 24) + 24) % 24) / BLOCK_HOURS);
 export const WEATHER_PARAMS = {
   // fogMul thickens the phase fog; windMul scales the season wind; rain is
   // the streak layer's strength; grey desaturates the sky toward gloom.
@@ -156,28 +158,38 @@ export const WEATHER_PARAMS = {
   storm:    { fogMul: 2.20, windMul: 2.2, rain: 1.00, grey: 0.55 },
 };
 
-// The weather of one whole hour of one campaign day. Pure and seeded: the
-// board reads it to print the forecast, the flight reads it to keep it.
-export function weatherAtHour(day, hourInt) {
-  const hi = ((Math.floor(hourInt) % 24) + 24) % 24;
-  const r = mulberry32((Math.floor(day) * 1000003 + hi * 7919 + 17) >>> 0)();
+// The weather of one whole 4-hour block of one campaign day. Pure and
+// seeded from the same hash family as the old hourly table: the board
+// reads it to print the forecast, the flight reads it to keep it.
+export function weatherAtBlock(day, blockIdx) {
+  const bi = ((Math.floor(blockIdx) % 6) + 6) % 6;
+  const r = mulberry32((Math.floor(day) * 1000003 + bi * 7919 + 17) >>> 0)();
   if (r < 0.42) return 'clear';
   if (r < 0.65) return 'overcast';
   if (r < 0.85) return 'rain';
   return 'storm';
 }
 
-// Blended weather parameters at a fractional hour: the current hour's state
-// rules, and the next hour's parameters ease in over its last ten minutes,
-// so fog, wind and rain never pop at an hour boundary. The dominant state
-// (what the HUD names) is the current hour's until the blend passes halfway.
+// The weather in force at an hour: the weather of the block containing it.
+export function weatherAtHour(day, hourFloat) {
+  return weatherAtBlock(day, blockOfHour(hourFloat));
+}
+
+// Blended weather parameters at a fractional hour: the current block's
+// state rules the whole block, and the next block's parameters ease in
+// over the block's last ten minutes only, so fog, wind and rain never pop
+// at a boundary — and never churn mid-flight either. The dominant state
+// (what the HUD names) is the current block's until the blend passes
+// halfway. The last block of the day blends into tomorrow's first block.
 export function weatherBlend(day, hourFloat) {
-  const h0 = Math.floor(hourFloat);
-  const frac = hourFloat - h0;
-  const b = smooth((frac - 5 / 6) * 6);
-  const p0 = WEATHER_PARAMS[weatherAtHour(day, h0)];
-  const p1 = WEATHER_PARAMS[weatherAtHour(day, h0 + 1)];
-  const out = { state: b < 0.5 ? weatherAtHour(day, h0) : weatherAtHour(day, h0 + 1) };
+  const h = ((hourFloat % 24) + 24) % 24;
+  const block = Math.floor(h / BLOCK_HOURS);
+  const minsToEnd = (BLOCK_HOURS - (h - block * BLOCK_HOURS)) * 60;
+  const b = smooth((10 - minsToEnd) / 10);
+  const s0 = weatherAtBlock(day, block);
+  const s1 = block === 5 ? weatherAtBlock(day + 1, 0) : weatherAtBlock(day, block + 1);
+  const p0 = WEATHER_PARAMS[s0], p1 = WEATHER_PARAMS[s1];
+  const out = { state: b < 0.5 ? s0 : s1 };
   for (const f of ['fogMul', 'windMul', 'rain', 'grey']) out[f] = lerp(p0[f], p1[f], b);
   return out;
 }

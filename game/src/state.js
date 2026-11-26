@@ -1,7 +1,7 @@
 // Campaign state and its localStorage save. Pure transitions live here so the
 // logic suite can drive them; the DOM layer only renders what this returns.
 import { ISLANDS, HOP_M, CUSTOMERS, ringCourse, ringCountFor } from './world.js';
-import { weatherAtHour } from './clock.js';
+import { weatherAtBlock, blockOfHour } from './clock.js';
 import { mulberry32 } from './util.js';
 
 export const SAVE_KEY = 'senja-hopper-save-v9';
@@ -75,14 +75,15 @@ export function morningBoard(save, daySeed) {
   }
   // Departures spread across the day — dawn, mid-morning, midday, afternoon,
   // senja, night — three slots a third of the day apart, rotated by the day
-  // seed. Each ticket's weather is the clock table's word for its departure
-  // hour: the forecast printed on the board is the sky the flight will get.
+  // seed. Each ticket's weather is the clock table's word for the 4-hour
+  // block containing its departure hour: the forecast printed on the board
+  // is the sky the flight will get, and keep getting for the whole block.
   const SLOTS = [5.75, 8.25, 10.75, 13.25, 15.75, 18.25, 20.75, 23.0];
   const wrnd = mulberry32(daySeed * 104729 + 7);
   const start = Math.floor(wrnd() * SLOTS.length);
   tickets.forEach((tk, i) => {
     tk.depHour = SLOTS[(start + i * 3) % SLOTS.length];
-    tk.weather = weatherAtHour(daySeed, Math.floor(tk.depHour));
+    tk.weather = weatherAtBlock(daySeed, blockOfHour(tk.depHour));
   });
   return tickets;
 }

@@ -6,6 +6,30 @@ import { Builder, M4 } from './engine3d.js';
 import { mulberry32, clamp, lerp } from './util.js';
 
 const CREAM = [0.96, 0.86, 0.64], RED = [0.80, 0.22, 0.15], TEAL = [0.09, 0.26, 0.31];
+
+// How dark the world is right now, 0 (full day) to 1 (deep night), read
+// off the phase's ambient ceiling. The clock's palettes are untouched —
+// this only measures them, and every night treatment (ring glow, strip
+// light spill) scales with it, so dusk fades the lamps in gradually.
+export function darknessOf(env) {
+  if (!env || !env.ambHi) return 0;
+  const lum = 0.299 * env.ambHi[0] + 0.587 * env.ambHi[1] + 0.114 * env.ambHi[2];
+  return clamp((0.42 - lum) / 0.30, 0, 1);
+}
+
+// Night ring overlays grow with distance: a fixed-size halo at 1 KM is a
+// sub-pixel hairline no matter how bright, so the glow (and, more gently,
+// the hot core) scale up with range to hold a minimum screen presence —
+// the course reads as a chain of lights at night. At approach range the
+// scale is 1 and the ring looks exactly as built.
+export function nightGlowM(r, depth) {
+  const s = clamp(depth / 380, 1, 3);
+  return M4.compose(r.x, r.altM, -r.dist, Math.PI / 2, 0, 0, s);
+}
+export function nightCoreM(r, depth) {
+  const s = 1 + (clamp(depth / 380, 1, 3) - 1) * 0.45;
+  return M4.compose(r.x, r.altM, -r.dist, Math.PI / 2, 0, 0, s);
+}
 const SAND = [0.93, 0.78, 0.52], GREEN = [0.24, 0.48, 0.26], GREEN2 = [0.16, 0.38, 0.22];
 const TRUNK = [0.42, 0.30, 0.18], ROCK = [0.45, 0.38, 0.36], GOLD = [1.0, 0.72, 0.18];
 const PAST = [0.35, 0.95, 0.55], DARK = [0.04, 0.07, 0.09], FOAM = [0.98, 0.95, 0.88];
@@ -106,7 +130,19 @@ export function buildRingMeshes(R) {
   // past 1.0 so it pops against sky and fog) — depth order reads at a glance:
   // bright means next, gold means later, green means done.
   const next = new Builder(); next.torus(0, 0, 0, 4.4, 0.46, 22, 10, [1.45, 1.08, 0.38]);
-  return { gold: R.makeMesh(gold), past: R.makeMesh(past), next: R.makeMesh(next) };
+  // Night treatment, drawn only as darkness falls (the scene scales their
+  // alpha with it; at day they are never drawn and the course looks exactly
+  // as it always did). A fat translucent halo torus gives each ring a glow
+  // the fog cannot eat, and hot cores — colours far past 1.0, so the lit
+  // shader's emissive term carries them — replace the dim day shading that
+  // left night rings as small dark-orange circles against a black sky.
+  const glow = new Builder(); glow.torus(0, 0, 0, 4.4, 1.55, 22, 10, [2.0, 1.45, 0.42]);
+  const goldNight = new Builder(); goldNight.torus(0, 0, 0, 4.4, 0.46, 22, 10, [2.15, 1.55, 0.48]);
+  const nextNight = new Builder(); nextNight.torus(0, 0, 0, 4.4, 0.52, 22, 10, [2.9, 2.15, 0.85]);
+  return {
+    gold: R.makeMesh(gold), past: R.makeMesh(past), next: R.makeMesh(next),
+    glow: R.makeMesh(glow), goldNight: R.makeMesh(goldNight), nextNight: R.makeMesh(nextNight),
+  };
 }
 
 // The destination airport: a marked runway deck on flat ground at the
@@ -118,18 +154,50 @@ export function buildRingMeshes(R) {
 export const STRIP_LAYOUT = { width: 27, length: 200, centreZ: 89, topY: 0.02 };
 export function buildStrip(R) {
   const b = new Builder();
-  const DECK = [0.22, 0.23, 0.27], PAINT = [0.95, 0.93, 0.86], LAMP = [1.5, 1.25, 0.7];
+  const DECK = [0.22, 0.23, 0.27], PAINT = [0.95, 0.93, 0.86], LAMP = [2.3, 1.85, 0.9];
   b.box(0, -0.14, 0, 48, 0.28, 232, [0.76, 0.68, 0.52]); // sand apron: the airfield reads from a kilometre out
   b.box(0, -0.26, 0, STRIP_LAYOUT.width, 0.56, STRIP_LAYOUT.length, DECK);
   b.box(-12.6, 0.05, 0, 0.9, 0.07, 196, PAINT);
   b.box(12.6, 0.05, 0, 0.9, 0.07, 196, PAINT);
   for (let i = -2; i <= 2; i++) b.box(i * 4.6, 0.05, 92, 2.4, 0.07, 10, PAINT); // threshold bars
   for (let z = -84; z <= 84; z += 21) b.box(0, 0.05, z, 0.8, 0.07, 9, PAINT); // centreline
-  for (let z = 118; z <= 286; z += 42) { // approach lights on posts
-    b.box(-17, 0.45, z, 0.55, 0.9, 0.55, LAMP);
-    b.box(17, 0.45, z, 0.55, 0.9, 0.55, LAMP);
+  // Edge lights: a lamp every 14 m down both edges, colours well past 1.0
+  // so at night the emissive term makes the strip read as LIT from
+  // approach distance — the first version had only paint and two rows of
+  // small approach posts, and a real night landing saw a plain grey deck.
+  for (let z = -98; z <= 98; z += 14) {
+    b.box(-13.6, 0.32, z, 0.72, 0.5, 0.72, LAMP);
+    b.box(13.6, 0.32, z, 0.72, 0.5, 0.72, LAMP);
   }
-  b.box(0, 0.35, 104, 34, 0.7, 0.8, LAMP); // threshold light bar
+  for (let z = 118; z <= 286; z += 42) { // approach lights on posts
+    b.box(-17, 0.55, z, 0.85, 1.1, 0.85, LAMP);
+    b.box(17, 0.55, z, 0.85, 1.1, 0.85, LAMP);
+  }
+  // Centreline approach light system: a row of elevated heads over the
+  // water running 200 m out from the threshold, ending in a crossbar.
+  // The flat strip all but vanishes at grazing angles on a real night
+  // approach — a line of lights standing 5 m over the sea does not, and
+  // it points straight at the threshold the way a real ALS does.
+  for (let z = 132; z <= 312; z += 30) {
+    b.box(0, 2.5, z, 0.4, 5, 0.4, [0.25, 0.25, 0.28]);
+    b.box(0, 5.1, z, 1.15, 0.6, 1.15, [2.6, 2.2, 1.2]);
+  }
+  b.box(0, 5.1, 312, 13, 0.6, 1.1, [2.6, 2.2, 1.2]); // the crossbar
+  b.box(0, 0.42, 104, 34, 0.85, 0.9, [2.5, 2.3, 1.3]); // threshold light bar
+  return R.makeMesh(b);
+}
+
+// The strip's light spill: translucent glow ribbons hovering over the edge
+// light rows and a halo bar over the threshold. A separate mesh because
+// the scene draws it with alpha scaled by darkness — invisible by day,
+// unmistakable on a night approach.
+export function buildStripGlow(R) {
+  const b = new Builder();
+  const GLOW = [2.4, 1.9, 0.85];
+  b.box(-13.6, 0.62, 0, 1.7, 0.16, 200, GLOW);
+  b.box(13.6, 0.62, 0, 1.7, 0.16, 200, GLOW);
+  b.box(0, 0.8, 104, 36, 0.28, 2.4, [2.4, 2.3, 1.4]); // threshold halo
+  b.box(0, 0.5, 222, 2.4, 0.14, 200, GLOW); // centreline spill under the ALS
   return R.makeMesh(b);
 }
 
@@ -314,7 +382,12 @@ export function createScene(R, assets) {
     drawLane(R, assets, -st.legDist + 150);
     // The strip herself: a deck on the destination shore, threshold facing
     // the plane, growing out of the haze from a kilometre out.
-    R.draw(assets.strip, M4.compose(0, 0, -st.legDist + STRIP_LAYOUT.centreZ, 0, 0, 0));
+    const stripM = M4.compose(0, 0, -st.legDist + STRIP_LAYOUT.centreZ, 0, 0, 0);
+    R.draw(assets.strip, stripM);
+    // Her light spill fades in with darkness: by night the lit edges and
+    // the threshold halo are the approach's main landmark.
+    const dark = darknessOf(st.env);
+    if (assets.stripGlow && dark > 0.02) R.draw(assets.stripGlow, stripM, 0.40 * dark);
     // Airport buildings at the runway's far end (and a twin behind the start).
     R.draw(assets.airport, M4.compose(0, 0, -st.legDist - 14, 0, 0, 0));
     R.draw(assets.airport, M4.compose(0, 0, 128, 0, Math.PI, 0, 0.85));
@@ -325,7 +398,11 @@ export function createScene(R, assets) {
       R.draw(assets.cloud, M4.compose(c.x, c.y, c.z, 0, 0, 0, c.s), 0.88);
     }
     // Rings: the next one bright, the rest gold (fog thins them with range),
-    // green once threaded, ghosts once missed.
+    // green once threaded, ghosts once missed. As darkness falls each live
+    // ring gains its runway-light treatment — a glow halo whose strength
+    // scales with the dark, and a hot emissive core; the NEXT ring burns
+    // brightest and pulses gently, so the course reads at night the way
+    // the strip does. By day (dark = 0) none of this is drawn at all.
     const nextRing = st.rings.find(r => !r.passed && !r.missed);
     for (const r of st.rings) {
       const dz = -r.dist - pz;
@@ -333,8 +410,20 @@ export function createScene(R, assets) {
       const m = M4.compose(r.x, r.altM, -r.dist, Math.PI / 2, 0, 0, r.passed ? 1 : 1 + 0.05 * Math.sin(st.time * 3));
       if (r.passed) R.draw(assets.rings.past, m);
       else if (r.missed) R.draw(assets.rings.gold, m, 0.3);
-      else if (r === nextRing) R.draw(assets.rings.next, m);
-      else R.draw(assets.rings.gold, m);
+      else if (r === nextRing) {
+        R.draw(assets.rings.next, m);
+        if (dark > 0.02) {
+          const pulse = 0.85 + 0.15 * Math.sin(st.time * 3);
+          R.draw(assets.rings.glow, nightGlowM(r, -dz), (0.14 + 0.30 * pulse) * dark);
+          R.draw(assets.rings.nextNight, m, dark);
+        }
+      } else {
+        R.draw(assets.rings.gold, m);
+        if (dark > 0.02) {
+          R.draw(assets.rings.glow, nightGlowM(r, -dz), 0.22 * dark);
+          R.draw(assets.rings.goldNight, nightCoreM(r, -dz), 0.95 * dark);
+        }
+      }
     }
     // Ring-pass flashes: a torus blooming outward where the plane crossed.
     for (const fx of st.fx || []) {
