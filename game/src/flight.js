@@ -14,10 +14,19 @@ export const RING_R = 4.4; // pass-through radius in metres: the rendered torus
 export const RING_LONG = 7; // longitudinal window in metres
 export const RING_BONUS = 15000;
 export const CENTRE_BONUS = 10000;
-export const HARBOUR_FEE = 400;
+export const AIRFIELD_FEE = 400;
+export const HARBOUR_FEE = AIRFIELD_FEE; // legacy alias: the fee's name changed with the runway
+// Departures happen from a paved runway now: the plane lines up on the
+// strip at the departure island and rolls RUNWAY_M of pavement before the
+// water. The ground roll on asphalt is a real phase of the flight — the
+// speed builds at RUNWAY_ACCEL (the lerp constant below), so rotation is
+// a moment the pilot chooses, not the first second of the leg.
+export const RUNWAY_M = 260;
+export const RUNWAY_ACCEL = 0.55;
 
 export function createFlight(opts) {
   const legDist = opts.legDist;
+  const runwayM = opts.runwayM || 0;
   return {
     t: 0, dist: 0, legDist, x: 0, alt: 0, speed: 0, vs: 0,
     maxAlt: 0, airborne: false, done: false, outcome: null,
@@ -25,6 +34,8 @@ export function createFlight(opts) {
     ringsHit: 0, engineLvl: opts.engineLvl || 1, hullLvl: opts.hullLvl || 1,
     wind: opts.wind || 0, approachTime: 0, approachGood: 0,
     touchdown: null, bank: 0, pitchVis: 0,
+    runwayM, surface: runwayM > 0 ? 'runway' : 'water',
+    tookOffFrom: null, overrun: false,
   };
 }
 
@@ -35,8 +46,13 @@ export function stepFlight(s, input, dt) {
   s.t += dt;
   const engPower = 1 + (s.engineLvl - 1) * 0.09;
   const targetSpeed = input.throttle * MAX_SPEED * engPower;
-  const accel = s.alt <= 0.01 ? 3.4 : 5.2; // water drag makes the run slower
+  // On the ground the roll builds at the surface's own rate: pavement is a
+  // deliberate roll (RUNWAY_ACCEL), open water keeps the old draggy run,
+  // and in the air the engine answers at full rate.
+  const onGround = s.alt <= 0.01;
+  const accel = !onGround ? 5.2 : (s.dist < s.runwayM ? RUNWAY_ACCEL : 3.4);
   s.speed = lerp(s.speed, targetSpeed, clamp(dt * accel / 6, 0, 1));
+  s.surface = !onGround ? 'air' : (s.dist < s.runwayM ? 'runway' : 'water');
   if (s.speed < 0.05 && input.throttle === 0) s.speed = 0;
 
   // Climb authority scales with airflow; the envelope test flies full throttle.
@@ -54,7 +70,10 @@ export function stepFlight(s, input, dt) {
   if (s.alt <= 0.01 && s.speed < LIFTOFF) s.vs = Math.min(s.vs, 0); // floats hold her down
   if (s.alt <= 0.01 && s.vs < 0) s.vs = 0;
   s.alt = Math.max(0, s.alt + s.vs * dt);
-  if (s.alt > 0.05) s.airborne = true;
+  if (s.alt > 0.05 && !s.airborne) {
+    s.airborne = true;
+    s.tookOffFrom = s.dist <= s.runwayM ? 'runway' : 'water';
+  }
   s.maxAlt = Math.max(s.maxAlt, s.alt);
   s.vs = dt > 0 ? (s.alt - prevAlt) / dt : 0; // sampled VS: the gauge reads this
 
@@ -88,7 +107,14 @@ export function stepFlight(s, input, dt) {
     if (Math.abs(s.alt - approachTargetM(remain)) <= 8) s.approachGood += dt;
   }
 
-  if (s.dist >= s.legDist) finishFlight(s);
+  // The aborted departure: a plane that never rotates rolls off the end
+  // of the runway into the overrun, and the departure is over right there
+  // — she does not taxi the whole leg on the water. (A staged state placed
+  // on the ground past the runway reads the same way: no flight happened.)
+  if (!s.airborne && s.runwayM > 0 && s.dist > s.runwayM) {
+    s.overrun = true;
+    finishFlight(s);
+  } else if (s.dist >= s.legDist) finishFlight(s);
   return s;
 }
 
@@ -99,8 +125,10 @@ export function approachTargetM(remainM) {
 
 function finishFlight(s) {
   s.done = true;
-  if (!s.airborne || s.maxAlt < 3) {
-    s.outcome = 'taxied';
+  if (s.overrun || !s.airborne || s.maxAlt < 3) {
+    // No flight happened: either she ran off the runway's end still on
+    // the ground, or she never truly left it. The departure is aborted.
+    s.outcome = 'aborted';
     s.touchdown = { vs: 0, x: s.x, soft: 0, centre: 0, approach: 0 };
     return;
   }
@@ -145,8 +173,8 @@ export function settleFlight(s, ticket, fuelLvl) {
   // Fuel burns with time aloft as well as distance: over the same hop, a
   // fast crossing costs less than a slow one.
   const fuelCost = Math.round((s.legDist * 3.0 + s.t * 110) * (1 - (fuelLvl - 1) * 0.22));
-  if (s.outcome === 'taxied') {
-    return { lines: [{ k: 'fee', amt: -HARBOUR_FEE }], total: -HARBOUR_FEE, grade: null, delivered: false };
+  if (s.outcome === 'aborted') {
+    return { lines: [{ k: 'fee', amt: -AIRFIELD_FEE }], total: -AIRFIELD_FEE, grade: null, delivered: false };
   }
   if (s.outcome !== 'landed') {
     return { lines: [{ k: 'fuel', amt: -fuelCost }], total: -fuelCost, grade: null, delivered: false };

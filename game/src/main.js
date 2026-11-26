@@ -4,8 +4,8 @@
 // writes into ONE normalized frame, so switching schemes mid-flight changes
 // only who is holding the controls — never the flight itself.
 import { createRenderer } from './engine3d.js';
-import { buildPlane, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildStreaks, buildAirport, buildCloud, buildLightCone, cloudField, createScene } from './scene3d.js';
-import { createFlight, stepFlight, settleFlight, guidance } from './flight.js';
+import { buildPlane, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildStreaks, buildAirport, buildCloud, buildLightCone, cloudField, createScene } from './scene3d.js';
+import { createFlight, stepFlight, settleFlight, guidance, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
 import { ISLANDS, HOP_M, ringCourse } from './world.js';
 import { loadSave, storeSave, defaultSave, morningBoard, applyResult, challengeResult, windForSeason, UPGRADE_COST, CHALLENGES, SAVE_KEY } from './state.js';
@@ -488,6 +488,7 @@ function startFlight(ticket) {
     legDist: ticket.dist, rings: ticket.rings,
     engineLvl: save.upgrades.engine, hullLvl: save.upgrades.hull,
     wind: windForSeason(save.settings.season) * (WEATHER_PARAMS[ticket.weather]?.windMul ?? 1),
+    runwayM: RUNWAY_M, // departures roll on the paved strip at the home island
   });
   flightCtx = { flight: f, ticket, weather: ticket.weather || 'clear', wxPin: ticket.wxPin || null, finished: false, frozen: false, settle: null, challenge: null, stampEarned: false, fx: [] };
   envNow = skyAt(save.day, save.clockH, flightCtx.wxPin);
@@ -536,7 +537,7 @@ function setPaused(on) {
 function renderReceipt() {
   const s = $('#scr-receipt'); s.innerHTML = '';
   const { flight: f, ticket, settle, challenge, stampEarned } = flightCtx;
-  const titles = { landed: t('receipt_delivered'), taxied: t('receipt_taxied'), missed: t('receipt_missed'), splash: t('receipt_splash') };
+  const titles = { landed: t('receipt_delivered'), aborted: t('receipt_aborted'), missed: t('receipt_missed'), splash: t('receipt_splash') };
   s.append(el('h2', 'ptitle', titles[f.outcome] || titles.missed));
   const card = el('div', 'panel card');
   const head = el('div', 'row');
@@ -719,6 +720,8 @@ if (R) {
     buoys: buildBuoys(R),
     strip: buildStrip(R),
     stripGlow: buildStripGlow(R),
+    deptStrip: buildDepartureRunway(R),
+    deptGlow: buildDepartureGlow(R),
     airport: buildAirport(R),
     cloud: buildCloud(R),
     cone: buildLightCone(R),
@@ -737,7 +740,8 @@ function stageState() {
   if (flightCtx) {
     const f = flightCtx.flight;
     return { dist: f.dist, x: f.x, alt: f.alt, speed: f.speed, bank: f.bank, pitchVis: f.pitchVis,
-      rings: f.rings, legDist: f.legDist, time: ambient, propSpin, fx: flightCtx.fx, camMode, env: envNow };
+      rings: f.rings, legDist: f.legDist, time: ambient, propSpin, fx: flightCtx.fx, camMode, env: envNow,
+      surface: f.surface, discA: 0.08 + 0.24 * frame.throttle };
   }
   // Title backdrop: the plane under way over open sea, offset so the menu
   // column does not swallow her.
@@ -913,6 +917,25 @@ if (shot === 'flight' || shot === 'receipt') {
     f.dist = f.legDist - 430; f.alt = 24; f.x = 0; f.speed = 27;
     f.airborne = true; f.maxAlt = 24;
     frame.throttle = 0.55; rawFrame.throttle = 0.55;
+    propSpin = 2.4;
+    flightCtx.frozen = true;
+    if (scene) scene.snap(stageState());
+    updateHud();
+    steps = maxSteps; // posed: skip the pilot loop below
+  }
+  // &at=roll poses her mid-roll on the departure runway, &at=rotate at
+  // the moment she leaves it; &cam= picks the staging camera.
+  if ((params.get('at') === 'roll' || params.get('at') === 'rotate') && shot === 'flight') {
+    const camP = params.get('cam');
+    if (camP === 'near' || camP === 'far' || camP === 'cockpit') camMode = camP;
+    if (params.get('at') === 'roll') {
+      f.dist = 30; f.alt = 0; f.x = 0; f.speed = 13;
+      frame.throttle = 0.85; rawFrame.throttle = 0.85;
+    } else {
+      f.dist = 120; f.alt = 5; f.x = 0; f.speed = 24;
+      f.airborne = true; f.maxAlt = 5; f.tookOffFrom = 'runway'; f.pitchVis = 0.55;
+      frame.throttle = 1; rawFrame.throttle = 1;
+    }
     propSpin = 2.4;
     flightCtx.frozen = true;
     if (scene) scene.snap(stageState());
