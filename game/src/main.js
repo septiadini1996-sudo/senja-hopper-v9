@@ -4,17 +4,18 @@
 // Every control scheme writes into ONE normalized frame, so switching
 // schemes mid-flight changes only who is holding the controls — never
 // the flight itself.
-import { createRenderer } from './engine3d.js';
-import { buildPlane, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, cloudField, createScene } from './scene3d.js';
+import { createRenderer, M4 } from './engine3d.js';
+import { buildPlane, buildJet, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, cloudField, createScene } from './scene3d.js';
 import { cockpitState } from './cockpit.js';
 import { createFlight, stepFlight, settleFlight, guidance, objectiveState, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
-import { ISLANDS, HOP_M, ringCourse } from './world.js';
+import { ISLANDS, HOP_M, ringCourse, islandPositions, islandOutline } from './world.js';
 import { loadSave, storeSave, defaultSave, morningBoard, applyResult, applyType, challengeResult, windForSeason, buyPlane, switchPlane, UPGRADE_COST, CHALLENGES, SAVE_KEY } from './state.js';
 import { PLANES, planeById } from './planes.js';
 import { createLook, lookDrag, lookRelease, lookSet, updateLook } from './look.js';
 import { makeT } from './i18n.js';
 import { createAudio } from './audio.js';
+import { createRadio, radioPoll } from './radio.js';
 import { makeFrame, keyboardFrame, stickFrame, sliderValue, touchFrame, gyroFrame, gyroButtons, conditionFrame } from './input-core.js';
 import { pilotFrame } from './demo-pilot.js';
 import { clamp, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
@@ -61,6 +62,42 @@ const gyro = { status: 'idle', enabled: false, neutral: { beta: 0, gamma: 0 }, s
 const tilt = { beta: 0, gamma: 0 };
 
 const audio = createAudio(() => save.settings);
+
+// ---------- airport radio (v13) ----------
+// radio.js judges when the tower speaks; here the transmissions queue,
+// print on the strip, and sound in the synthesized radio voice. The
+// queue advances only in flight and never while paused.
+let radio = null, radioQueue = [], radioLog = [], radioNowKey = null, radioBusyUntil = 0;
+function windText() {
+  const kt = Math.round(4 + Math.abs(windForSeason(save.settings.season)) * 6 + (envNow.windMul || 0) * 4);
+  return `120 at ${kt}`;
+}
+function radioText(m) {
+  const plane = planeById(save.planes.active);
+  const dest = flightCtx ? ISLANDS[flightCtx.ticket.to].name : ISLANDS[Math.min(save.islandIdx + 1, ISLANDS.length - 1)].name;
+  return t('radio_' + m.key, { cs: plane.callsign, dest, wind: windText() });
+}
+function pollRadio() {
+  if (!flightCtx || !radio) return;
+  const msgs = radioPoll(radio, flightCtx.flight, { type: flightCtx.ticket.type || 'cargo', weather: envNow.state });
+  for (const m of msgs) {
+    radioLog.push(m.key);
+    if ((save.settings.radio ?? 4) > 0) radioQueue.push(m);
+  }
+}
+function pumpRadio(now) {
+  const strip = $('#radio'); if (!strip) return;
+  if (screen !== 'flight' || paused || !flightCtx) { strip.style.display = 'none'; return; }
+  if (now < radioBusyUntil) return;
+  const m = radioQueue.shift();
+  if (!m) { strip.style.display = 'none'; radioNowKey = null; return; }
+  const label = m.speaker === 'tower' ? (save.settings.lang === 'id' ? 'MENARA' : 'TOWER') : m.speaker.toUpperCase();
+  strip.innerHTML = `<b>${label}</b> ${radioText(m)}`;
+  strip.style.display = 'block';
+  radioNowKey = m.key;
+  const dur = audio.radioVoice(radioText(m), m.speaker);
+  radioBusyUntil = now + Math.max(2.8, dur + 0.5);
+}
 
 // ---------- tiny DOM helpers ----------
 function el(tag, cls, text) {
@@ -115,6 +152,7 @@ function renderTitle() {
   }));
   col.append(
     btn(t('morning_board'), '', 'board', () => showBoard()),
+    btn(t('map'), '', 'title-map', () => openMap('title')),
     btn(t('hangar'), '', 'hangar', () => { renderHangar(); show('hangar'); }),
     btn(t('controls'), '', 'controls', () => { controlsReturn = 'title'; renderControls(); show('controls'); }),
     btn(t('challenges'), '', 'challenges', () => { renderChallenges(); show('challenges'); }),
@@ -133,16 +171,35 @@ function board() {
   if (boardCache.day !== save.day) boardCache = { day: save.day, tickets: morningBoard(save, save.day) };
   return boardCache.tickets;
 }
+// Mission-type icons (v13): small hand-drawn vector marks, one per kind
+// of work — drawn paths, never emoji.
+const TYPE_SVG = {
+  cargo: '<path d="M4 8 L12 4 L20 8 V16 L12 20 L4 16 Z M4 8 L12 12 L20 8 M12 12 V20" />',
+  passenger: '<circle cx="12" cy="8" r="3.4" /><path d="M5.5 19 C6.5 15.5 9 14 12 14 C15 14 17.5 15.5 18.5 19" />',
+  rescue: '<circle cx="12" cy="12" r="7.5" /><circle cx="12" cy="12" r="3.2" /><path d="M12 4.5 V8 M12 16 V19.5 M4.5 12 H8 M16 12 H19.5" />',
+  photo: '<rect x="4" y="8" width="16" height="11" rx="2" /><circle cx="12" cy="13.5" r="3.4" /><path d="M9 8 L10.5 5.5 H13.5 L15 8" />',
+  express: '<path d="M13 3 L5.5 13.5 H11 L9.8 21 L18.5 10 H12.8 Z" />',
+  trial: '<circle cx="12" cy="13" r="7" /><path d="M12 9.5 V13 L14.8 14.8 M9.5 3.5 H14.5 M12 3.5 V6.5" />',
+  storm: '<path d="M7 15 A4.5 4.5 0 1 1 8.6 6.6 A5.5 5.5 0 0 1 19 9 A3.8 3.8 0 0 1 17.5 15 Z" /><path d="M12.5 14.5 L10.5 18 H12.8 L11.5 21.5" />',
+};
+function typeIcon(type) {
+  const s = el('span', 'typeicon');
+  s.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">${TYPE_SVG[type] || TYPE_SVG.cargo}</svg>`;
+  return s;
+}
+
 function renderBoard() {
   const s = $('#scr-board'); s.innerHTML = '';
   s.append(chipsRow(), el('h2', 'ptitle', t('board_title')), el('p', 'meta', t('board_hint')));
   const activeCap = planeById(save.planes.active).capacity;
+  const activeIcon = planeIconImg(save.planes.active, 'ticketicon');
   for (const [i, tk] of board().entries()) {
     const card = el('div', 'panel card');
+    if (activeIcon) card.append(activeIcon.cloneNode());
     const row = el('div', 'row');
     row.append(el('span', 'route', `${ISLANDS[tk.from].name} → ${ISLANDS[tk.to].name}`),
       el('span', 'tag' + (tk.main ? '' : ' side'), tk.main ? t('ticket_main') : t('ticket_side')),
-      el('span', 'tag side', t('type_' + (tk.type || 'cargo'))));
+      typeIcon(tk.type || 'cargo'), el('span', 'tag side', t('type_' + (tk.type || 'cargo'))));
     const cargo = save.settings.lang === 'id' ? tk.cargoId : tk.cargo;
     const meta = el('p', 'meta', `${tk.customer} — ${t('cargo')}: ${cargo}\n${t('distance')}: ${(tk.dist / 1000).toFixed(1)} km · ${t('pay')}: ${fmtRp(tk.pay)} · ${tk.rings.length} ${t('rings_avail')}\n${t('departs')}: ${fmtGameHour(tk.depHour)} · ${wxIcon(tk.weather)} ${t('wx_' + tk.weather)}`);
     meta.style.whiteSpace = 'pre-line';
@@ -161,8 +218,107 @@ function renderBoard() {
     }
     card.append(fly); s.append(card);
   }
-  s.append(btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }));
+  s.append(btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }),
+    btn(t('map'), 'small', 'board-map', () => openMap('board')));
 }
+
+// ---------- the chart (v13) ----------
+// A parchment map of the whole chain, drawn from the world's own
+// tables: island positions from islandPositions() (the cumulative hop
+// line), coastlines from islandOutline() — the same polygons the 3D
+// terrain is built from — so the shape on the chart IS the island.
+let mapReturn = 'title';
+function openMap(from) { mapReturn = from; renderMap(); show('map'); }
+function closeMap() {
+  if (mapReturn === 'pause') { show('flight'); $('#pause').classList.add('on'); }
+  else if (mapReturn === 'board') showBoard();
+  else { renderTitle(); show('title'); }
+}
+function renderMap() {
+  const s = $('#scr-map'); s.innerHTML = '';
+  s.append(chipsRow(), el('h2', 'ptitle', t('map_title')));
+  const card = el('div', 'panel card'); card.style.width = 'min(700px, 94vw)';
+  const cv = document.createElement('canvas'); cv.id = 'mapcv';
+  cv.width = 680; cv.height = 400; cv.style.width = '100%'; cv.style.display = 'block';
+  card.append(cv); s.append(card);
+  s.append(el('p', 'meta', t('map_hint')));
+  s.append(btn(t('back'), 'small', 'map-back', closeMap));
+  drawMapChart(cv);
+}
+function drawMapChart(cv) {
+  const g = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  // Parchment ground with a soft vignette and a faint graticule.
+  g.fillStyle = '#e9d6ab'; g.fillRect(0, 0, W, H);
+  const vg = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.95);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(122,84,32,0.28)');
+  g.fillStyle = vg; g.fillRect(0, 0, W, H);
+  g.strokeStyle = 'rgba(120, 90, 40, 0.14)'; g.lineWidth = 1;
+  for (let x = 40; x < W; x += 46) { g.beginPath(); g.moveTo(x, 8); g.lineTo(x, H - 8); g.stroke(); }
+  for (let y = 30; y < H; y += 46) { g.beginPath(); g.moveTo(8, y); g.lineTo(W - 8, y); g.stroke(); }
+  const pos = islandPositions();
+  const total = Math.max(1, -pos[pos.length - 1].z);
+  const px = (p) => 52 + (-p.z / total) * (W - 104);
+  const py = (p) => H * 0.52 - (p.lat + 3.4) * 15;
+  const pts = pos.map(p => [px(p), py(p)]);
+  // The route: a dashed ink line island to island, in campaign order.
+  g.strokeStyle = 'rgba(122, 60, 30, 0.75)'; g.lineWidth = 2; g.setLineDash([7, 6]);
+  g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke();
+  g.setLineDash([]);
+  const R = 30;
+  pos.forEach((p, i) => {
+    const isl = ISLANDS[i], [cx, cy] = pts[i];
+    const outline = islandOutline(isl);
+    // Land: the real coastline, filled parchment-green over sand.
+    for (const [fill, k] of [['#d9b878', 1.10], ['#7fae5f', 1.0]]) {
+      g.beginPath();
+      outline.forEach((o, j) => {
+        const X = cx + o.dx * R * k, Y = cy - o.dy * R * k;
+        j ? g.lineTo(X, Y) : g.moveTo(X, Y);
+      });
+      g.closePath(); g.fillStyle = fill; g.fill();
+    }
+    g.beginPath();
+    outline.forEach((o, j) => {
+      const X = cx + o.dx * R, Y = cy - o.dy * R;
+      j ? g.lineTo(X, Y) : g.moveTo(X, Y);
+    });
+    g.closePath(); g.strokeStyle = '#5d4322'; g.lineWidth = 1.6; g.stroke();
+    // The volcano, where the island keeps one.
+    if (isl.volcano) {
+      const vx = cx + isl.volcano.at[0] * R, vy = cy - isl.volcano.at[1] * R;
+      g.beginPath(); g.moveTo(vx - 6, vy + 4); g.lineTo(vx, vy - 6); g.lineTo(vx + 6, vy + 4); g.closePath();
+      g.fillStyle = '#8a6b42'; g.fill();
+    }
+    // Stamps earned: a gold postmark ring over the island.
+    if (save.stamps.includes(isl.id)) {
+      g.beginPath(); g.arc(cx, cy, R * 0.52, 0, Math.PI * 2);
+      g.strokeStyle = 'rgba(178, 32, 24, 0.85)'; g.lineWidth = 3; g.stroke();
+      g.fillStyle = 'rgba(178, 32, 24, 0.9)'; g.font = '900 15px sans-serif';
+      g.textAlign = 'center'; g.fillText('✓', cx, cy + 5);
+    }
+    // The player's island, and the next stamp beyond it.
+    if (i === save.islandIdx) {
+      g.beginPath(); g.arc(cx, cy, R * 1.28, 0, Math.PI * 2);
+      g.strokeStyle = '#b44f1d'; g.lineWidth = 2.5; g.stroke();
+      g.fillStyle = '#7a2d12'; g.font = '800 10.5px sans-serif'; g.textAlign = 'center';
+      g.fillText(t('map_here'), cx, cy - R * 1.28 - 6);
+    } else if (i === save.islandIdx + 1) {
+      g.fillStyle = '#7a2d12'; g.font = '800 10.5px sans-serif'; g.textAlign = 'center';
+      g.fillText(t('map_next'), cx, cy - R * 1.05 - 4);
+    }
+    g.fillStyle = '#4a3418'; g.font = '700 12.5px sans-serif'; g.textAlign = 'center';
+    g.fillText(isl.name, cx, cy + R * 1.18 + 13);
+  });
+  // Compass rose, top right.
+  const [nx, ny] = [W - 42, 44];
+  g.strokeStyle = '#5d4322'; g.lineWidth = 1.6;
+  g.beginPath(); g.moveTo(nx, ny + 14); g.lineTo(nx, ny - 14); g.stroke();
+  g.beginPath(); g.moveTo(nx - 5, ny - 8); g.lineTo(nx, ny - 16); g.lineTo(nx + 5, ny - 8); g.closePath();
+  g.fillStyle = '#5d4322'; g.fill();
+  g.font = '800 12px sans-serif'; g.textAlign = 'center'; g.fillText('N', nx, ny - 21);
+}
+
 function renderHangar() {
   const s = $('#scr-hangar'); s.innerHTML = '';
   s.append(chipsRow(), el('h2', 'ptitle', t('hangar_title')));
@@ -173,18 +329,24 @@ function renderHangar() {
     const owned = save.planes.owned.includes(p.id);
     const active = save.planes.active === p.id;
     const card = el('div', 'panel card');
+    // Her portrait (v13): the airframe's own rendered mesh, in livery.
+    const icon = planeIconImg(p.id, 'planeicon');
+    if (icon) card.append(icon);
     const row = el('div', 'row');
     row.append(el('span', 'route', t('plane_' + p.id)));
     if (active) row.append(el('span', 'tag', t('active_plane')));
-    else if (!owned) row.append(el('span', 'tag side', fmtRp(p.price)));
+    else if (!owned && !p.finale) row.append(el('span', 'tag side', fmtRp(p.price)));
     const stats = el('p', 'meta',
-      `${t('top_speed')}: ${Math.round(89 * p.speedMul)} KT · ${t('climb_w')}: ${Math.round(p.climbMul * 100)}% · ${t('capacity_w')}: ${p.capacity}`);
+      `${t('top_speed')}: ${Math.round(89 * p.speedMul)} KT · ${t('climb_w')}: ${Math.round(p.climbMul * 100)}% · ${t('capacity_w')}: ${p.capacity} · ${p.callsign}`);
     card.append(row, stats);
     if (active) { /* she is the one on the line */ }
     else if (owned) {
       card.append(btn(t('switch_plane'), 'small', 'use-plane-' + p.id, () => {
-        if (switchPlane(save, p.id)) { storeSave(store, save); setActivePlaneMesh(); audio.blip('coin'); renderHangar(); }
+        if (switchPlane(save, p.id)) { storeSave(store, save); setActivePlaneMesh(); audio.blip('switch'); renderHangar(); }
       }));
+    } else if (p.finale) {
+      // The flagship is never sold: the campaign itself is the price.
+      card.append(el('p', 'meta', t('jet_locked')));
     } else {
       const b = btn(`${t('buy_plane')} · ${fmtRp(p.price)}`, 'small', 'buy-plane-' + p.id, () => {
         if (!buyPlane(save, p.id)) { toast(t('not_enough')); return; }
@@ -220,9 +382,48 @@ function renderHangar() {
   s.append(btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }));
 }
 // Point the stage at the active airframe: the scene draws ONE plane
-// mesh, so a switch rebuilds it from the new plane's livery and span.
+// mesh, so a switch rebuilds it from the new plane's livery and span —
+// or, for the flagship, from the jet builder entirely (v13).
 function setActivePlaneMesh() {
-  if (R && assets) assets.plane = buildPlane(R, planeById(save.planes.active));
+  if (R && assets) {
+    const p = planeById(save.planes.active);
+    assets.plane = p.jet ? buildJet(R) : buildPlane(R, p);
+  }
+}
+
+// Hangar icons (v13): each airframe's portrait is its OWN mesh, rendered
+// once offscreen in senja light against a dark card ground — the jet
+// through the jet builder, the floatplanes through theirs, liveries and
+// proportions exactly as flown. Cached for the session; a plane's
+// portrait can never drift from its model.
+let iconCache = null;
+function planeIcons() {
+  if (iconCache) return iconCache;
+  iconCache = {};
+  if (!R) return iconCache;
+  try {
+    const cv = document.createElement('canvas'); cv.width = 264; cv.height = 132;
+    const R2 = createRenderer(cv);
+    if (!R2) return iconCache;
+    R2.setEnv({ ...skyAt(1, 18.25), fog: [0.10, 0.06, 0.09], fogD: 0.0001 });
+    for (const p of PLANES) {
+      const built = p.jet ? buildJet(R2) : buildPlane(R2, p);
+      const d = p.jet ? 36 : 12.5, hh = p.jet ? 3.2 : 1.5;
+      const eye = [-d, hh + 3.6, -d * 0.30];
+      R2.begin();
+      R2.setCamera(M4.lookAt(eye, [0, hh * 0.72, 0], [0, 1, 0]), M4.persp(0.60, 2, 0.5, 400), eye);
+      R2.draw(built.plane, M4.compose(0, 0, 0, 0, 0.5, 0, p.jet ? 1 : p.scale));
+      iconCache[p.id] = cv.toDataURL('image/png');
+    }
+  } catch { iconCache = {}; }
+  return iconCache;
+}
+function planeIconImg(id, cls) {
+  const src = planeIcons()[id];
+  if (!src) return null;
+  const im = document.createElement('img');
+  im.className = cls; im.src = src; im.alt = t('plane_' + id);
+  return im;
 }
 function renderChallenges() {
   const s = $('#scr-challenges'); s.innerHTML = '';
@@ -270,6 +471,7 @@ function renderSettings() {
   const row = (name, control) => { const r = el('div', 'setrow'); r.append(el('span', 'setname', name), control); return r; };
   card.append(row(t('music'), segControl(() => save.settings.music, v => { save.settings.music = v; storeSave(store, save); audio.applyLevels(); renderSettings(); })));
   card.append(row(t('sfx'), segControl(() => save.settings.sfx, v => { save.settings.sfx = v; storeSave(store, save); audio.applyLevels(); renderSettings(); })));
+  card.append(row(t('radio_w'), segControl(() => save.settings.radio ?? 4, v => { save.settings.radio = v; storeSave(store, save); audio.applyLevels(); renderSettings(); })));
   const master = el('div', 'segrow');
   for (const on of [true, false]) {
     const b = btn(on ? t('on') : t('off'), 'small' + (save.settings.master === on ? ' on' : ''), '', () => {
@@ -401,7 +603,7 @@ function renderHowto() {
   card.append(el('p', 'meta', t('how_body')));
   s.append(card, btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }));
 }
-function renderAll() { renderTitle(); renderBoard(); renderHangar(); renderControls(); renderChallenges(); renderStats(); renderSettings(); renderHowto(); }
+function renderAll() { renderTitle(); renderBoard(); renderHangar(); renderControls(); renderChallenges(); renderStats(); renderSettings(); renderHowto(); renderMap(); }
 
 // ---------- flight HUD & controls (built once, updated per frame) ----------
 function buildHud() {
@@ -439,13 +641,14 @@ function buildHud() {
     ribbon.append(tick);
   }
   const guide = el('div'); guide.id = 'guide';
+  const radioStrip = el('div'); radioStrip.id = 'radio'; radioStrip.style.display = 'none';
   const lookChip = el('div'); lookChip.id = 'lookchip'; lookChip.style.display = 'none';
   const warn = el('div'); warn.id = 'warn';
   const radar = document.createElement('canvas'); radar.id = 'radar';
   radar.width = 116; radar.height = 116;
   const veil = el('div'); veil.id = 'cloudveil';
   const rain = document.createElement('canvas'); rain.id = 'rain';
-  hud.append(top, gauges, ribbon, guide, lookChip, warn, radar, veil, rain);
+  hud.append(top, gauges, ribbon, guide, radioStrip, lookChip, warn, radar, veil, rain);
   ui.append(hud);
   // Touch pad (TOUCH scheme)
   const pad = el('div', 'fctl'); pad.id = 'pad';
@@ -475,6 +678,7 @@ function buildHud() {
   pcard.append(el('h2', 'ptitle', t('pause_title')));
   pcard.append(
     btn(t('resume'), 'primary', 'resume', () => setPaused(false)),
+    btn(t('map'), '', 'pause-map', () => { $('#pause').classList.remove('on'); openMap('pause'); }),
     btn(t('controls'), '', 'pause-controls', () => { controlsReturn = 'pause'; $('#pause').classList.remove('on'); renderControls(); show('controls'); }),
     btn(t('quit_title'), '', 'quit', () => quitFlight()),
   );
@@ -560,12 +764,13 @@ function startFlight(ticket) {
     // The hangar rides along (v12): the active airframe's speed and
     // climb, the handling kit's response, the mode's stall damping —
     // and the ticket's own objective geometry.
-    speedMul: plane.speedMul, climbMul: plane.climbMul,
+    speedMul: plane.speedMul, climbMul: plane.climbMul, accelMul: plane.accelMul || 1,
     respMul: 1 + ((save.upgrades.handling || 1) - 1) * 0.18,
     assist: (save.handling || 'assisted') === 'assisted',
     pickup: ticket.pickup || null, gate: ticket.gate || null,
   });
   flightCtx = { flight: f, ticket, weather: ticket.weather || 'clear', wxPin: ticket.wxPin || null, finished: false, frozen: false, settle: null, challenge: null, stampEarned: false, fx: [] };
+  pilotMode = false; // every fresh flight starts in the player's hands (v13 fix: a demo pilot left engaged by staging used to override the next flight's controls — throttle and keys alike)
   envNow = skyAt(save.day, save.clockH, flightCtx.wxPin);
   flightCtx.weather = envNow.state;
   storeSave(store, save);
@@ -576,7 +781,11 @@ function startFlight(ticket) {
   lookSet(look, 0, 0); lookRelease(look);
   paused = false; warned = false; stallWarned = false;
   $('#pause').classList.remove('on');
-  audio.startMusic(true); audio.engineStart();
+  radio = createRadio(); radioQueue = []; radioLog = []; radioNowKey = null; radioBusyUntil = 0;
+  // The destination island is THIS ticket's island (v13): its real
+  // shape, rebuilt per flight from the world table.
+  if (R && assets) assets.isleDest = buildIsland(R, ISLANDS[ticket.to], 1);
+  audio.engineStart(); audio.windStart(); audio.rainStart();
   show('flight');
   updateHud();
 }
@@ -591,10 +800,21 @@ function finishFlight(instant = false) {
   ctx.stampEarned = !!(settle.delivered && ticket.main && ticket.to === save.islandIdx + 1
     && !save.stamps.includes(ISLANDS[ticket.to].id));
   if (ctx.challenge) save.challengesDone.push(ctx.challenge.id);
+  const wasJetLocked = !save.planes.owned.includes('raksasa');
   applyResult(save, ticket, f, settle, ctx.challenge ? ctx.challenge.bonus : 0);
+  ctx.jetJustUnlocked = wasJetLocked && save.planes.owned.includes('raksasa');
   storeSave(store, save);
-  audio.engineStop();
-  if (settle.delivered) audio.blip('stamp'); else if (f.outcome === 'splash') audio.blip('splash');
+  audio.engineStop(); audio.windStop(); audio.rainStop();
+  // The crash and the celebration (v13): an exploded arrival gets the
+  // boom and the sad sting; a delivery gets the thud its firmness
+  // earned, the stamp, and the jingle.
+  if (f.exploded) {
+    ctx.boom = { x: f.x, dist: f.dist, t0: ambient };
+    audio.blip('boom'); audio.jingle('lose');
+  } else if (settle.delivered) {
+    audio.blip('thud', clamp(Math.abs((f.touchdown ? f.touchdown.vs : -1.1) + 1.1) / 6, 0, 1));
+    audio.blip('stamp'); audio.jingle('win');
+  } else if (f.outcome === 'splash') audio.blip('splash');
   const go = () => { renderReceipt(); show('receipt'); };
   if (instant) go(); else setTimeout(go, 650);
 }
@@ -602,7 +822,7 @@ function quitFlight() {
   // Quitting never settles the flight, so cash, stamps and the day stand.
   $('#pause').classList.remove('on');
   paused = false; flightCtx = null;
-  audio.engineStop(); audio.startMusic(false);
+  audio.engineStop(); audio.windStop(); audio.rainStop();
   renderTitle(); show('title');
 }
 function setPaused(on) {
@@ -615,8 +835,9 @@ function renderReceipt() {
   const { flight: f, ticket, settle, challenge, stampEarned } = flightCtx;
   const titles = { landed: t('receipt_delivered'), aborted: t('receipt_aborted'), missed: t('receipt_missed'), splash: t('receipt_splash') };
   // A rescue that comes home empty gets its own headline: she landed,
-  // but the job did not happen.
-  const title = (f.outcome === 'landed' && !settle.delivered && ticket.type === 'rescue')
+  // but the job did not happen. A high-energy arrival gets the fireball.
+  const title = f.exploded ? t('receipt_boom')
+    : (f.outcome === 'landed' && !settle.delivered && ticket.type === 'rescue')
     ? t('receipt_rescue_missed') : (titles[f.outcome] || titles.missed);
   s.append(el('h2', 'ptitle', title));
   const card = el('div', 'panel card');
@@ -657,7 +878,21 @@ function renderReceipt() {
     `${t('r_time')}: ${fmtClock(f.t)} · ${stampEarned ? t('r_stamp', { island: ISLANDS[ticket.to].name }) : t('r_nostamp')}\n${t('r_newbalance')}: ${fmtRp(save.saldo)}`);
   meta.style.whiteSpace = 'pre-line';
   card.append(meta);
+  // The tower's last word rides the receipt (v13): the welcome, or the
+  // unanswered call over a wreck.
+  const lastRadio = radioLog[radioLog.length - 1];
+  if (lastRadio === 'welcome' || lastRadio === 'crashcall') {
+    card.append(el('p', 'meta', `RADIO — ${radioText({ key: lastRadio, speaker: 'tower' })}`));
+  }
   s.append(card);
+  // The finale celebration (v13): the flight that completes the chain
+  // unlocks the flagship, and the receipt says so before anything else.
+  if (flightCtx.jetJustUnlocked) {
+    const cel = el('div', 'panel card');
+    cel.append(el('h3', 'ptitle', t('jet_unlocked_title')), el('p', 'meta', t('jet_unlocked_body')));
+    cel.append(btn(t('jet_unlocked_btn'), 'small', 'to-hangar-jet', () => { flightCtx = null; renderHangar(); show('hangar'); }));
+    s.append(cel);
+  }
   const row = el('div', 'row'); row.style.justifyContent = 'center';
   row.append(
     btn(t('morning_board'), 'primary small', 'to-board', () => { flightCtx = null; showBoard(); }),
@@ -849,12 +1084,12 @@ try { R = createRenderer(canvas); } catch { R = null; }
 if (R) {
   assets = {
     plane: buildPlane(R, planeById(save.planes.active)),
-    isleHome: buildIsland(R, ISLANDS[0].seed, 1),
-    isleDest: buildIsland(R, ISLANDS[1].seed, 1),
+    isleHome: buildIsland(R, ISLANDS[0], 1),
+    isleDest: buildIsland(R, ISLANDS[1], 1),
     islets: [
-      { mesh: buildIsland(R, 777, 0.5), x: -170, f: 0.3, rot: 1.2, s: 0.55 },
-      { mesh: buildIsland(R, 888, 0.5), x: 210, f: 0.55, rot: 2.6, s: 0.7 },
-      { mesh: buildIsland(R, 999, 0.5), x: -240, f: 0.78, rot: 0.4, s: 0.5 },
+      { mesh: buildIsland(R, ISLANDS[2], 0.5), x: -170, f: 0.3, rot: 1.2, s: 0.55 },
+      { mesh: buildIsland(R, ISLANDS[4], 0.5), x: 210, f: 0.55, rot: 2.6, s: 0.7 },
+      { mesh: buildIsland(R, ISLANDS[1], 0.5), x: -240, f: 0.78, rot: 0.4, s: 0.5 },
     ],
     rings: buildRingMeshes(R),
     sea: buildSeaMesh(R),
@@ -866,6 +1101,13 @@ if (R) {
     deptGlow: buildDepartureGlow(R),
     homeTerrain: buildHomeTerrain(R),
     shallows: buildShallows(R),
+    destShallows: buildDestShallows(R),
+    boom: buildExplosion(R),
+    bird: buildBird(R),
+    beacon: buildBeacon(R),
+    flag: buildFlag(R),
+    van: buildVan(R),
+    sock: buildSock(R),
     airport: buildAirport(R),
     cloud: buildCloud(R),
     cloudB: buildCloudB(R),
@@ -891,7 +1133,10 @@ function stageState() {
     return { dist: f.dist, x: f.x, alt: f.alt, speed: f.speed, vs: f.vs, bank: f.bank, pitchVis: f.pitchVis,
       rings: f.rings, legDist: f.legDist, time: IS_SHOT ? 3.7 : ambient, propSpin, fx: flightCtx.fx, camMode, env: envNow,
       surface: f.surface, discA: 0.08 + 0.24 * frame.throttle,
+      boom: flightCtx.boom ? { x: flightCtx.boom.x, dist: flightCtx.boom.dist, age: ambient - flightCtx.boom.t0 } : null,
       lookYaw: look.yaw, lookPitch: look.pitch, planeScale: planeById(save.planes.active).scale,
+      camMul: planeById(save.planes.active).camMul || 1,
+      seatY: planeById(save.planes.active).seatY, seatZ: planeById(save.planes.active).seatZ,
       pickup: f.pickup, gate: f.gate };
   }
   if (titleBackdrop) {
@@ -920,6 +1165,7 @@ resize();
 
 // ---------- main loop ----------
 let lastTs = 0, acc = 0;
+let musicMood = ''; // the music loop's current weather (v13)
 const STEP = 1 / 60;
 let pilotMode = false; // demo-pilot control, used by staging and the test rig
 function stepOnce(dt) {
@@ -940,8 +1186,10 @@ function stepOnce(dt) {
   f.wind = windForSeason(save.settings.season) * envNow.windMul;
   const before = f.ringsHit;
   stepFlight(f, frame, dt);
+  pollRadio(); // the tower speaks at flight phases, judged after each step
   propSpin += dt * (3 + frame.throttle * 34);
   audio.engineSet(frame.throttle, f.speed / (89 * 0.514444));
+  audio.windSet(f.speed / 46);
   if (f.ringsHit > before) {
     audio.blip('ring');
     // The pass must be FELT the same frame: a flash blooms where the ring
@@ -1011,6 +1259,15 @@ function loop(ts) {
   }
   updateLook(look, dt);
   advanceClock(dt);
+  // The music follows the moment (v13): bright by day, calm at night,
+  // tense in a storm, the flight figure under way. The mood is recomputed
+  // cheaply and the loop only restarts when it actually changes.
+  const mood = (flightCtx && screen === 'flight')
+    ? (envNow.state === 'storm' ? 'storm' : 'flight')
+    : envNow.state === 'storm' ? 'storm' : (save.clockH >= 19 || save.clockH < 5.2) ? 'night' : 'day';
+  if (mood !== musicMood) { musicMood = mood; audio.startMusic(mood); }
+  pumpRadio(ambient);
+  audio.rainSet(flightCtx && screen === 'flight' ? envNow.rain : 0);
   if (screen === 'flight' && flightCtx && !paused && !flightCtx.finished && !flightCtx.frozen) {
     acc += dt;
     let guard = 0;
@@ -1070,7 +1327,7 @@ function drawVeil() {
 
 // ---------- boot & screenshot staging ----------
 function buildScreens() {
-  for (const name of ['title', 'board', 'hangar', 'controls', 'challenges', 'stats', 'settings', 'howto', 'receipt']) {
+  for (const name of ['title', 'board', 'hangar', 'controls', 'challenges', 'stats', 'settings', 'howto', 'receipt', 'map']) {
     const s = el('section', 'screen'); s.id = 'scr-' + name; ui.append(s);
   }
 }
@@ -1085,6 +1342,14 @@ const params = new URLSearchParams(location.search);
 const shot = params.get('shot');
 if (shot === 'flight' || shot === 'receipt') {
   save.settings.lang = 'en'; t = makeT('en'); save.started = true;
+  // &plane= stages a specific airframe (the flagship's dossier frame
+  // flies the jet): grant it, activate it, rebuild its mesh.
+  const planeP = params.get('plane');
+  if (planeP && PLANES.some(p => p.id === planeP)) {
+    if (!save.planes.owned.includes(planeP)) save.planes.owned.push(planeP);
+    save.planes.active = planeP;
+    setActivePlaneMesh();
+  }
   const ticket = morningBoard(save, 1)[0];
   // &type= stages a specific mission (rescue, photo, ...) on the cover hop.
   const typeP = params.get('type');
@@ -1180,6 +1445,13 @@ if (shot === 'flight' || shot === 'receipt') {
   titleBackdrop = { dist: 120, x: 0, alt: 5, speed: 24, bank: 0.06, pitchVis: 0.55 };
   renderTitle(); show('title');
   if (scene) scene.snap(stageState());
+} else if (shot === 'map') {
+  // The chart frame (v13): a campaign mid-way — three stamps banked,
+  // standing on Sumbawa, Flores the next stamp east.
+  save.settings.lang = 'en'; t = makeT('en'); save.started = true;
+  save.stamps = ['penida', 'lombok', 'sumbawa'];
+  save.islandIdx = 3;
+  openMap('title');
 }
 
 // Debug/testing surface: read-only state plus the same actions the UI offers.
@@ -1197,6 +1469,11 @@ window.__senja = {
   get handling() { return save.handling || 'assisted'; },
   get throttle() { return frame.throttle; },
   get look() { return { yaw: look.yaw, pitch: look.pitch }; },
+  // The radio's record (v13): every transmission fired this flight, and
+  // the one currently on the strip.
+  get radioLog() { return [...radioLog]; },
+  get radioNow() { return radioNowKey; },
+  openMap,
   setLook(yawDeg, pitchDeg) { lookSet(look, (yawDeg || 0) * Math.PI / 180, (pitchDeg || 0) * Math.PI / 180); },
   setThrottle(v) { frame.throttle = clamp(v, 0, 1); rawFrame.throttle = frame.throttle; },
   get fog() { return R ? R.getFog() : null; },

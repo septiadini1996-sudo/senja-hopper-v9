@@ -92,6 +92,24 @@ export const STRINGS = {
     cam_near: 'CAM · CHASE NEAR', cam_far: 'CAM · CHASE FAR', cam_cockpit: 'CAM · COCKPIT',
     handling: 'HANDLING', handling_assisted: 'ASSISTED', handling_direct: 'DIRECT',
     handling_desc: 'Assisted damps the controls and gently levels you back toward the route. Direct is the raw stick — nothing between you and the plane.',
+    map: 'MAP', map_title: 'CHART OF THE ARCHIPELAGO', map_here: 'YOU ARE HERE',
+    map_hint: 'Gold rings are stamps earned. The dashed line is your next stamp run.',
+    map_next: 'NEXT STAMP', radio_w: 'RADIO',
+    receipt_boom: 'SHE WENT IN — FIREBALL ON THE WATER',
+    plane_raksasa: 'RAKSASA', jet_locked: 'Locked — earn every island stamp to unlock her',
+    jet_unlocked_title: 'THE FLAGSHIP IS YOURS',
+    jet_unlocked_body: 'Every stamp in the book. The RAKSASA — a wide-body flagship in gold and white — now waits in your hangar, the fastest wings in the archipelago.',
+    jet_unlocked_btn: 'SEE HER IN THE HANGAR',
+    radio_takeoff: '{cs}, Archipel Tower — wind {wind}, cleared for takeoff. Good hunting up there.',
+    radio_ack: 'Cleared for takeoff, {cs}. Rolling.',
+    radio_departure: '{cs}, contact {dest} Tower on 118.7. Selamat jalan.',
+    radio_stormwarn: '{cs}, be advised — heavy weather on your route. Hold on up there.',
+    radio_distress: 'Tower, tower — fishing boat here, we are standing by for the mail plane. Lantern is lit.',
+    radio_relay: '{cs}, a boat waits at sea on your route. Low and slow over her, then bring them home.',
+    radio_landing: '{cs}, {dest} Tower — wind {wind}, cleared to land.',
+    radio_stallwarn: '{cs}, tower — check your airspeed, you are sinking fast.',
+    radio_welcome: '{cs}, welcome to {dest}. Nice flying.',
+    radio_crashcall: '{cs}, tower calling… {cs}, do you read?',
   },
   id: {
     game_title: 'ARCHIPEL AIR', game_sub: 'Pos Udara Kepulauan',
@@ -183,13 +201,31 @@ export const STRINGS = {
     cam_near: 'KAM · KEJAR DEKAT', cam_far: 'KAM · KEJAR JAUH', cam_cockpit: 'KAM · KOKPIT',
     handling: 'KARAKTER KENDALI', handling_assisted: 'DIBANTU', handling_direct: 'LANGSUNG',
     handling_desc: 'Dibantu meredam kendali dan perlahan meluruskanmu kembali ke rute. Langsung adalah kendali mentah — tanpa apa pun di antara kamu dan pesawat.',
+    map: 'PETA', map_title: 'PETA KEPULAUAN', map_here: 'KAMU DI SINI',
+    map_hint: 'Lingkaran emas adalah stempel yang diraih. Garis putus-putus adalah rute stempel berikutnya.',
+    map_next: 'STEMPEL BERIKUTNYA', radio_w: 'RADIO BANDARA',
+    receipt_boom: 'IA JATUH — BOLA API DI ATAS AIR',
+    plane_raksasa: 'RAKSASA', jet_locked: 'Terkunci — raih semua stempel pulau untuk membukanya',
+    jet_unlocked_title: 'KAPAL INDUKNYA MILIKMU',
+    jet_unlocked_body: 'Semua stempel lengkap. RAKSASA — kapal induk berbadan lebar emas-putih — kini menunggu di bengkelmu, sayap tercepat di kepulauan.',
+    jet_unlocked_btn: 'LIHAT DI BENGKEL',
+    radio_takeoff: '{cs}, Menara Archipel — angin {wind}, diizinkan lepas landas. Selamat berburu di atas sana.',
+    radio_ack: 'Diizinkan lepas landas, {cs}. Meluncur.',
+    radio_departure: '{cs}, hubungi Menara {dest} di 118.7. Selamat jalan.',
+    radio_stormwarn: '{cs}, perhatian — cuaca berat di rutemu. Pegangan kuat di atas sana.',
+    radio_distress: 'Menara, menara — perahu nelayan di sini, kami menunggu pesawat pos. Lentera sudah menyala.',
+    radio_relay: '{cs}, sebuah perahu menunggu di laut di rutemu. Rendah dan pelan di atasnya, lalu bawa pulang.',
+    radio_landing: '{cs}, Menara {dest} — angin {wind}, diizinkan mendarat.',
+    radio_stallwarn: '{cs}, menara — periksa kecepatanmu, kamu tenggelam cepat.',
+    radio_welcome: '{cs}, selamat datang di {dest}. Terbang yang bagus.',
+    radio_crashcall: '{cs}, menara memanggil… {cs}, apa kamu mendengar?',
   },
 };
 export function makeT(lang) {
   const table = STRINGS[lang] || STRINGS.en;
   return (key, vars) => {
     let s = table[key] ?? STRINGS.en[key] ?? key;
-    if (vars) for (const k of Object.keys(vars)) s = s.replace('{' + k + '}', String(vars[k]));
+    if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(String(vars[k])); // every occurrence (v13: the tower's crash call repeats the callsign three times)
     return s;
   };
 }

@@ -125,8 +125,7 @@
   #pause { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
     background: rgba(16, 8, 14, 0.55); flex-direction: column; z-index: 5; }
   #pause.on { display: flex; }
-  .stamp { display: inline-block; border: 4px solid #c22e1c; color: #c22e1c; font-weight: 900;
-    font-size: 27px; letter-spacing: 3px; padding: 5px 18px; border-radius: 8px;
+  .stamp { display: inline-block; border: 4px solid #c22e1c; color: #c22e1c; font-weight: 900;    font-size: 27px; letter-spacing: 3px; padding: 5px 18px; border-radius: 8px;
     transform: rotate(-9deg); background: rgba(255, 240, 220, 0.92); margin: 8px 0; }
   .gradebig { font-size: 64px; font-weight: 900; color: #ffd98f; text-shadow: 0 3px 0 #a33d1c; line-height: 1; }
   .bar { height: 10px; border-radius: 5px; background: rgba(255,255,255,0.12); overflow: hidden; flex: 1; }
@@ -141,6 +140,19 @@
     padding: 8px 18px; border-radius: 999px; font-weight: 700; z-index: 9; }
   #nogl { display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
     text-align: center; padding: 30px; font-size: 17px; background: #2a1626; z-index: 20; }
+  /* ---------- v13: icons, chart, radio ---------- */
+  .planeicon { width: 100%; max-width: 330px; display: block; margin: 2px auto 8px;
+    border-radius: 10px; border: 1px solid rgba(255, 190, 110, 0.35); }
+  .ticketicon { width: 92px; float: right; margin: 0 0 6px 10px; border-radius: 8px;
+    border: 1px solid rgba(255, 190, 110, 0.30); }
+  .typeicon { display: inline-flex; width: 21px; height: 21px; color: #ffd98f; vertical-align: -5px; }
+  .typeicon svg { width: 100%; height: 100%; }
+  #radio { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
+    max-width: min(620px, 92vw); background: rgba(10, 22, 16, 0.88);
+    border: 1px solid rgba(110, 230, 160, 0.55); color: #d8ffe9;
+    border-radius: 10px; padding: 8px 16px; font-size: 14.5px; font-weight: 600;
+    letter-spacing: 0.4px; text-align: center; box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
+  #radio b { color: #6ee6a0; letter-spacing: 1.5px; margin-right: 6px; }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 </style>
 </head>

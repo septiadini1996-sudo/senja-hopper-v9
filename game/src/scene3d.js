@@ -4,6 +4,7 @@
 // sits at z = -distance, the destination island waits at z = -legDist.
 import { Builder, M4, sub3, cross3, norm3 } from './engine3d.js';
 import { mulberry32, clamp, lerp } from './util.js';
+import { triangulatePoly } from './world.js';
 import { PANEL, GAUGES, RADAR, GLASS_PANES, gaugeReadings, radarBlips } from './cockpit.js';
 
 const CREAM = [0.96, 0.86, 0.64], RED = [0.80, 0.22, 0.15], TEAL = [0.09, 0.26, 0.31];
@@ -205,91 +206,197 @@ function buildPropMesh(R) {
   return R.makeMesh(p);
 }
 
-function palm(b, x, z, h, rnd) {
+function palm(b, x, z, h, rnd, y0 = 0) {
   const lean = (rnd() - 0.5) * 0.7;
-  b.box(x + lean * h * 0.3, h / 2, z, 0.22, h, 0.22, TRUNK);
+  b.box(x + lean * h * 0.3, y0 + h / 2, z, 0.22, h, 0.22, TRUNK);
   const tx = x + lean * h * 0.6;
-  b.cone(tx, h - 0.55, z, 1.9, 0.85, 6, GREEN);
-  b.cone(tx, h - 0.15, z, 1.25, 0.7, 6, GREEN2);
+  b.cone(tx, y0 + h - 0.55, z, 1.9, 0.85, 6, GREEN);
+  b.cone(tx, y0 + h - 0.15, z, 1.25, 0.7, 6, GREEN2);
   // Variety from a stable position hash (deterministic, no extra rnd
   // draws to disturb the island's layout): some crowns carry a third,
   // wider frond layer, and the taller palms carry coconuts.
   const v = Math.abs(Math.sin(x * 12.9898 + z * 78.233)) % 1;
-  if (v < 0.45) b.cone(tx, h - 0.95, z, 2.45, 0.7, 6, GREEN);
+  if (v < 0.45) b.cone(tx, y0 + h - 0.95, z, 2.45, 0.7, 6, GREEN);
   if (h > 4.4) for (const [ox, oz] of [[-0.3, 0.15], [0.25, -0.2], [0.05, 0.35]]) {
-    b.box(tx + ox, h - 0.95, z + oz, 0.26, 0.26, 0.26, [0.30, 0.22, 0.12]);
+    b.box(tx + ox, y0 + h - 0.95, z + oz, 0.26, 0.26, 0.26, [0.30, 0.22, 0.12]);
   }
 }
 
-export function buildIsland(R, seed, scale = 1) {
-  const rnd = mulberry32(seed);
+// ---- natural landforms (v13) ----
+// The owner called the old hills strange: bare cones parked on discs.
+// A landform is a smooth multi-lobe dome instead — a cosine profile
+// softened at the skirt, its footprint wobbled by two angular harmonics
+// so no two slopes match, and (for volcanoes) a crater bowl dipped into
+// the crown. ONE function gives the height everywhere: the logic suite
+// reads it through terrainHeightAt, the mesh builder samples it per
+// vertex, so the ground the tests measure is the ground the player sees.
+export function landformProfile(u) { // u = distance / radius, 0..1 → 1..0
+  if (u >= 1) return 0;
+  const c = 0.5 + 0.5 * Math.cos(Math.PI * u);
+  return Math.pow(c, 1.25);
+}
+export function landformWobble(th, seed) {
+  return 1 + 0.16 * Math.sin(th * 3 + seed) + 0.10 * Math.sin(th * 5 + seed * 1.7);
+}
+// Height of one landform entry {x, z, r, h, seed, kind} at a point, or
+// -1 outside its footprint. Volcanoes ('mountain') carry the crater:
+// inside 30% of the radius the profile is pinned to the rim's height
+// and dipped toward the centre, so the crown reads as a bowl.
+export function landformHeightAt(x, z, c) {
+  const dx = x - c.x, dz = z - c.z;
+  const d = Math.hypot(dx, dz);
+  const dd = d / landformWobble(Math.atan2(dz, dx), c.seed || 0);
+  if (dd >= c.r) return -1;
+  let p = landformProfile(dd / c.r);
+  if (c.kind === 'mountain') {
+    const rimU = 0.30, rimP = landformProfile(rimU);
+    const u = dd / c.r;
+    if (u < rimU) p = rimP * (0.80 + 0.20 * (u / rimU));
+  }
+  return 0.01 + c.h * p;
+}
+// A flat ring between two radii — foam lines and wet-sand bands that hug
+// a shoreline instead of the old full foam disc that paved the beach.
+export function shoreRing(b, cx, cz, rIn, rOut, y, color, seg = 40) {
+  for (let i = 0; i < seg; i++) {
+    const a0 = (i / seg) * Math.PI * 2, a1 = ((i + 1) / seg) * Math.PI * 2;
+    const p = (a, r) => [cx + Math.cos(a) * r, y, cz + Math.sin(a) * r];
+    b.quad(p(a0, rIn), p(a1, rIn), p(a1, rOut), p(a0, rOut), color);
+  }
+}
+// A bank wall from a landmass's top edge down into the sea: the side
+// of the island, so land reads as a solid body with depth at its edge.
+export function skirtRing(b, cx, cz, r, yTop, yBot, color, seg = 36) {
+  for (let i = 0; i < seg; i++) {
+    const a0 = (i / seg) * Math.PI * 2, a1 = ((i + 1) / seg) * Math.PI * 2;
+    const t = (a) => [cx + Math.cos(a) * r, yTop, cz + Math.sin(a) * r];
+    const bt = (a) => [cx + Math.cos(a) * r * 1.04, yBot, cz + Math.sin(a) * r * 1.04];
+    b.quad(t(a0), t(a1), bt(a1), bt(a0), color);
+  }
+}
+// low, soil breaking through the mid slopes, rock where it steepens or
+// climbs, a pale cap on the great peaks and dark ash in the crater.
+function landformColor(hf, slope, hash, kind) {
+  if (kind === 'mountain' && hf > 0.86) return [0.80, 0.82, 0.85];
+  if (kind === 'mountain' && hf > 0.68 && slope < 0.35) return [0.30, 0.26, 0.23]; // crater ash
+  if (slope > 0.62 || hf > 0.78) return [0.44, 0.40, 0.37];
+  if (hf > 0.42 && hash < (hf - 0.42) * 1.9) return [0.45, 0.36, 0.24]; // worn soil
+  return hash < 0.5 ? [0.23, 0.46, 0.25] : [0.28, 0.52, 0.28];
+}
+// Build one landform as a radial heightfield: rings × sectors of flat
+// facets, heights from landformHeightAt itself (base-relative), colours
+// from height and slope. baseY is where its skirt meets the ground.
+export function buildLandform(b, cx, cz, r, h, seed, kind, baseY = 0.01) {
+  const entry = { x: cx, z: cz, r, h, seed, kind };
+  const NS = 16, rings = [0, 0.16, 0.32, 0.48, 0.63, 0.77, 0.88, 0.96, 1.0];
+  const H = (x, z) => Math.max(0, landformHeightAt(x, z, entry) - 0.01) + baseY;
+  const pt = (a, u) => {
+    const wob = landformWobble(a, seed);
+    const x = cx + Math.cos(a) * r * u * wob, z = cz + Math.sin(a) * r * u * wob;
+    return [x, H(x, z), z];
+  };
+  for (let ri = 0; ri < rings.length - 1; ri++) {
+    for (let si = 0; si < NS; si++) {
+      const a0 = (si / NS) * Math.PI * 2, a1 = ((si + 1) / NS) * Math.PI * 2;
+      const p00 = pt(a0, rings[ri]), p10 = pt(a1, rings[ri]);
+      const p01 = pt(a0, rings[ri + 1]), p11 = pt(a1, rings[ri + 1]);
+      const cen = [(p00[0] + p11[0]) / 2, (p00[2] + p11[2]) / 2];
+      const hf = clamp((H(cen[0], cen[1]) - baseY) / h, 0, 1);
+      const slope = clamp(Math.abs(p01[1] - p00[1]) / Math.max(1, (rings[ri + 1] - rings[ri]) * r) * 1.6, 0, 1);
+      const hash = Math.abs(Math.sin(cen[0] * 12.9898 + cen[1] * 78.233) * 43758.5453) % 1;
+      const col = landformColor(hf, slope, hash, kind);
+      if (ri === 0) { b.tri(p00, p10, p11, col); b.tri(p00, p11, p01, col); }
+      else { b.quad(p00, p10, p11, p01, col); }
+    }
+  }
+}
+
+// An island, built from its REAL coastline (v13): the polygon in the
+// world table — Bali with its Bukit peninsula, Lombok under Rinjani,
+// Tambora's bulge on Sumbawa — triangulated for the beach, terraced
+// upward in its own vegetation tones, and crowned with its signature
+// volcano where the real island has one. The chart draws these same
+// points; the sea's land mask respects the same shore. One shape,
+// three readers. Unit (x, y-north) maps to world (x·R0, −y·R0): the
+// island's north coast lies at −Z, as it does on the chart.
+export function buildIsland(R, isl, scale = 1) {
+  const rnd = mulberry32(isl.seed);
   const b = new Builder();
-  const r = 46 * scale;
-  b.disc(0, 0.10, 0, r * 1.31, 20, FOAM); // the surf line: a pale rim where sea meets beach
-  b.disc(0, 0.25, 0, r * 1.22, 18, SAND); // beach apron
-  b.cone(0, 0.2, 0, r, 13 * scale, 9, GREEN2);
-  b.cone(10 * scale, 0.2, -8 * scale, r * 0.55, 19 * scale, 8, GREEN);
-  b.cone(-16 * scale, 0.2, 10 * scale, r * 0.4, 9 * scale, 7, ROCK);
-  // The volcano (v12): every island in the chain is a young volcano, and
-  // now she looks it — a great cone behind the settlement, forested at
-  // the skirt, bare rock at the shoulder, a dark crater at the crown.
-  // It stands off the shore axis the strip faces, so the approach over
-  // the beach never meets it.
-  const vx = -20 * scale, vz = 14 * scale;
-  b.cone(vx, 0.2, vz, r * 0.52, 21 * scale, 10, [0.27, 0.42, 0.26]);
-  b.cone(vx, 0.2 + 13 * scale, vz, r * 0.30, 9 * scale, 9, [0.44, 0.40, 0.37]);
-  b.disc(vx, 0.2 + 21.8 * scale, vz, r * 0.085, 8, [0.24, 0.20, 0.18]); // the crater
-  b.cone(vx + 26 * scale, 0.2, vz + 10 * scale, r * 0.30, 10 * scale, 8, GREEN2); // a foothill ridge
-  // Rock outcrops standing in the surf at the shore.
-  const ra = rnd() * Math.PI * 2;
-  b.cone(Math.cos(ra) * r * 1.04, 0.05, Math.sin(ra) * r * 1.04, r * 0.15, 2.0 * scale, 6, ROCK);
-  b.cone(Math.cos(ra + 2.4) * r * 1.02, 0.05, Math.sin(ra + 2.4) * r * 1.02, r * 0.10, 1.3 * scale, 6, ROCK);
-  const palms = 8 + Math.floor(rnd() * 5);
-  for (let i = 0; i < palms; i++) {
-    const a = rnd() * Math.PI * 2, rr = r * (0.45 + rnd() * 0.4);
-    palm(b, Math.cos(a) * rr, Math.sin(a) * rr, (3.6 + rnd() * 2.2) * scale, rnd);
+  const R0 = 54 * scale;
+  const [ax, ay] = isl.anchor;
+  const scaled = (k) => isl.shape.map(([x, y]) => [ax + (x - ax) * k, ay + (y - ay) * k]);
+  const W = ([x, y]) => [x * R0, -y * R0]; // unit → world (x, z)
+  const fan = (pts, y, color) => {
+    for (const [ia, ib, ic] of triangulatePoly(pts)) {
+      const A = W(pts[ia]), B = W(pts[ib]), C = W(pts[ic]);
+      b.tri([A[0], y, A[1]], [C[0], y, C[1]], [B[0], y, B[1]], color);
+    }
+  };
+  const strip = (p1, y1, p2, y2, color) => {
+    for (let i = 0; i < p1.length; i++) {
+      const A = W(p1[i]), B = W(p1[(i + 1) % p1.length]);
+      const C = W(p2[(i + 1) % p2.length]), D = W(p2[i]);
+      b.quad([A[0], y1, A[1]], [B[0], y1, B[1]], [C[0], y2, C[1]], [D[0], y2, D[1]], color);
+    }
+  };
+  const shore = scaled(1), wet = scaled(1.07), foamL = scaled(1.16);
+  fan(shore, 0.25, SAND);                                   // the beach itself
+  strip(shore, 0.16, wet, 0.10, [0.80, 0.64, 0.42]);         // wet sand at the waterline
+  strip(wet, 0.05, foamL, 0.02, FOAM);                      // the foam line, in the water
+  strip(shore, 0.25, scaled(1.03), -1.3, [0.72, 0.58, 0.38]); // the island's bank into the sea
+  // Terraces climb inland in the island's own greens — lush in the
+  // west of the chain, dry savanna toward the east (isl.veg).
+  const [g1, g2] = isl.veg;
+  const t1 = scaled(0.84), t2 = scaled(0.66), t3 = scaled(0.46);
+  strip(shore, 0.25, t1, 0.80, g2);
+  strip(t1, 0.80, t2, 1.65, g1);
+  strip(t2, 1.65, t3, 2.70, g2);
+  fan(t3, 2.70, g1);
+  // The signature volcano, a true landform where the real island keeps
+  // one (Agung, Rinjani, Tambora…); islands without one get a broad
+  // interior highland instead.
+  if (isl.volcano) {
+    const v = isl.volcano;
+    buildLandform(b, v.at[0] * R0, -v.at[1] * R0, v.r * R0, v.h * scale, isl.seed * 0.91 + 3, v.h >= 20 ? 'mountain' : 'hill', 0.2);
   }
-  // The settlement: a cluster of houses around the shore — scale and motion
-  // cues as much as scenery, since they grow and slide past on approach.
+  buildLandform(b, ax * R0, -ay * R0, 0.42 * R0, 4.5 * scale, isl.seed * 0.37 + 1, 'hill', 0.2);
+  // Palms dress the first terrace; the settlement clusters on the
+  // second, around one seeded stretch of coast — regional rhythm from
+  // the same seed that lays out everything else.
+  const shorePts = scaled(0.88), townPts = scaled(0.76);
+  for (let i = 0; i < shorePts.length; i += 2) {
+    if (rnd() < 0.35) continue;
+    const [wx, wz] = W(shorePts[i]);
+    palm(b, wx, wz, (3.6 + rnd() * 2.2) * scale, rnd, 0.55);
+  }
+  const start = Math.floor(rnd() * townPts.length);
   const houses = 4 + Math.floor(rnd() * 3);
-  const baseA = rnd() * Math.PI * 2;
   for (let i = 0; i < houses; i++) {
-    const a = baseA + (rnd() - 0.5) * 1.5, rr = r * (0.78 + rnd() * 0.16);
-    house(b, Math.cos(a) * rr, Math.sin(a) * rr, (0.9 + rnd() * 0.5) * scale, rnd);
+    const [wx, wz] = W(townPts[(start + i * 2) % townPts.length]);
+    house(b, wx, wz, (0.9 + rnd() * 0.5) * scale, rnd, 1.15);
   }
-  // A longhouse warehouse anchors most settlements: wide, low, a gabled
-  // roof and a dark loading door — a different silhouette from the homes.
-  if (rnd() < 0.75) {
-    const a = baseA + 1.9, wx = Math.cos(a) * r * 0.82, wz = Math.sin(a) * r * 0.82, s = scale;
-    b.box(wx, 1.15 * s, wz, 7.5 * s, 2.3 * s, 4.2 * s, [0.74, 0.68, 0.58]);
-    b.frustum(wx, 2.95 * s, wz, 8.3 * s, 1.3 * s, 5.0 * s, 0.10, [0.50, 0.30, 0.18]);
-    b.box(wx, 0.95 * s, wz - 2.15 * s, 1.7 * s, 1.9 * s, 0.15, [0.28, 0.20, 0.14]);
+  if (rnd() < 0.75) { // the longhouse warehouse anchors most settlements
+    const [wx, wz] = W(townPts[(start + houses * 2 + 3) % townPts.length]);
+    const s = scale;
+    b.box(wx, 1.15 + 1.15 * s, wz, 7.5 * s, 2.3 * s, 4.2 * s, [0.74, 0.68, 0.58]);
+    b.frustum(wx, 1.15 + 2.95 * s, wz, 8.3 * s, 1.3 * s, 5.0 * s, 0.10, [0.50, 0.30, 0.18]);
+    b.box(wx, 1.15 + 0.95 * s, wz - 2.15 * s, 1.7 * s, 1.9 * s, 0.15, [0.28, 0.20, 0.14]);
   }
-  // A lighthouse watches the island's far shore (v12): banded tower,
-  // a lamp room that burns past 1.0 so the night emissive takes it —
-  // one more light a night approach can steer by.
-  if (rnd() < 0.7) {
-    const la = baseA + 2.6, lx = Math.cos(la) * r * 1.02, lz = Math.sin(la) * r * 1.02, ls = scale;
-    b.box(lx, 1.6 * ls, lz, 1.7 * ls, 3.2 * ls, 1.7 * ls, [0.92, 0.90, 0.86]);
-    b.box(lx, 4.4 * ls, lz, 1.5 * ls, 2.4 * ls, 1.5 * ls, [0.72, 0.22, 0.16]);
-    b.box(lx, 6.8 * ls, lz, 1.3 * ls, 2.4 * ls, 1.3 * ls, [0.92, 0.90, 0.86]);
-    b.box(lx, 8.6 * ls, lz, 1.6 * ls, 1.2 * ls, 1.6 * ls, [2.2, 1.9, 1.2]); // the lamp
-    b.cone(lx, 9.2 * ls, lz, 1.35 * ls, 1.1 * ls, 6, [0.30, 0.30, 0.34]);
+  if (rnd() < 0.7) { // a lighthouse watches one point of the coast
+    const [wx, wz] = W(scaled(1.0)[Math.floor(rnd() * isl.shape.length)]);
+    const ls = scale;
+    b.box(wx, 0.25 + 1.6 * ls, wz, 1.7 * ls, 3.2 * ls, 1.7 * ls, [0.92, 0.90, 0.86]);
+    b.box(wx, 0.25 + 4.4 * ls, wz, 1.5 * ls, 2.4 * ls, 1.5 * ls, [0.72, 0.22, 0.16]);
+    b.box(wx, 0.25 + 6.8 * ls, wz, 1.3 * ls, 2.4 * ls, 1.3 * ls, [0.92, 0.90, 0.86]);
+    b.box(wx, 0.25 + 8.6 * ls, wz, 1.6 * ls, 1.2 * ls, 1.6 * ls, [2.2, 1.9, 1.2]); // the lamp
+    b.cone(wx, 0.25 + 9.2 * ls, wz, 1.35 * ls, 1.1 * ls, 6, [0.30, 0.30, 0.34]);
   }
-  // A jetty reaches into the shallows near the settlement: a deck on
-  // posts with a crate stack, aligned to whichever shore axis is nearer.
-  const px = Math.cos(baseA), pz = Math.sin(baseA);
-  if (Math.abs(px) > Math.abs(pz)) {
-    const jx = px * r * 1.08, jz = pz * r * 0.8;
-    b.box(jx, 0.55, jz, r * 0.5, 0.18, 3.0, [0.45, 0.36, 0.26]);
-    for (const off of [-0.2, 0, 0.2]) b.box(px * r * (1.08 + off), 0.1, jz, 0.3, 0.9, 0.3, [0.35, 0.28, 0.20]);
-    b.box(px * r * 0.92, 1.05, jz, 1.1, 0.85, 1.1, [0.62, 0.52, 0.38]);
-  } else {
-    const jx = px * r * 0.8, jz = pz * r * 1.08;
-    b.box(jx, 0.55, jz, 3.0, 0.18, r * 0.5, [0.45, 0.36, 0.26]);
-    for (const off of [-0.2, 0, 0.2]) b.box(jx, 0.1, pz * r * (1.08 + off), 0.3, 0.9, 0.3, [0.35, 0.28, 0.20]);
-    b.box(jx, 1.05, pz * r * 0.92, 1.1, 0.85, 1.1, [0.62, 0.52, 0.38]);
-  }
+  // Surf rocks stand off one seeded shore point.
+  const ri = Math.floor(rnd() * isl.shape.length);
+  const [rx, rz] = W(scaled(1.13)[ri]);
+  b.cone(rx, 0.02, rz, 4.5 * scale, 2.0 * scale, 6, ROCK);
+  const [rx2, rz2] = W(scaled(1.10)[(ri + 5) % isl.shape.length]);
+  b.cone(rx2, 0.02, rz2, 3.2 * scale, 1.3 * scale, 6, ROCK);
   return R.makeMesh(b);
 }
 
@@ -334,6 +441,16 @@ export function buildStrip(R) {
   b.box(33, 0.02, 0, 38, 0.08, 250, GREEN2);
   b.box(-33, 0.075, 0, 26, 0.03, 210, [0.30, 0.54, 0.29]); // a mowed inner band
   b.box(33, 0.075, 0, 26, 0.03, 210, [0.27, 0.50, 0.27]);
+  // Ground cover on the shoulders (v13): tufts in the grass and worn
+  // soil where the service track crosses — the far field lives too.
+  const trnd = mulberry32(5150);
+  for (const sx of [-1, 1]) for (let i = 0; i < 16; i++) {
+    const x = sx * (24 + trnd() * 18), z = -120 + trnd() * 240;
+    b.cone(x, 0.06, z, 0.34 + trnd() * 0.2, 0.5 + trnd() * 0.3, 4, [0.17, 0.36, 0.19]);
+  }
+  for (const [x, z, r] of [[-30, 40, 5], [31, -64, 4], [-28, -110, 6], [29, 96, 4.5]]) {
+    b.disc(x, 0.045, z, r, 9, [0.47, 0.38, 0.25]);
+  }
   // Palms frame the apron corners, well clear of the strip itself.
   const rnd = mulberry32(9182);
   palm(b, 38, -120, 5.0, rnd); palm(b, -38, -118, 4.5, rnd);
@@ -403,7 +520,7 @@ export function buildDepartureRunway(R) {
   const b = new Builder();
   const { aheadM, behindM, width, deckZ } = DEPT_RUNWAY;
   const len = aheadM + behindM, nearZ = behindM, farZ = -aheadM;
-  b.box(0, -0.11, deckZ, 46, 0.22, len + 4, SAND); // reclaimed ground slab
+  b.box(0, -0.11, deckZ, 68, 0.22, len + 4, SAND); // reclaimed ground slab, widened (v13)
   b.box(0, -0.02, deckZ, width, 0.06, len, DECK); // the pavement, top at y 0.01
   for (const sx of [-1, 1]) b.box(sx * (width / 2 - 1.2), 0.03, deckZ, 0.9, 0.03, len, PAINT); // edge paint
   // Threshold bars at the near end (the end she lines up behind) and at
@@ -422,7 +539,11 @@ export function buildDepartureRunway(R) {
   // own centreline, and a windsock stands where the pilot can see it.
   b.box(24, -0.015, 96, 21, 0.05, 14, DECK2);
   for (let x = 16; x <= 32; x += 4) b.box(x, 0.03, 96, 2, 0.02, 0.5, [0.95, 0.75, 0.2]);
-  b.box(38, -0.01, 118, 26, 0.05, 30, DECK2); // apron pad under the buildings
+  b.box(42, -0.01, 122, 42, 0.05, 46, DECK2); // apron pad under the buildings, enlarged (v13)
+  // A second pad across the strip for the fuel farm's home side, and a
+  // row of ground cones marking the taxiway's working edge.
+  b.box(-38, -0.01, 108, 24, 0.05, 30, DECK2);
+  for (let z = 84; z <= 132; z += 12) b.cone(-24.5, 0.02, z, 0.42, 0.75, 6, [0.95, 0.48, 0.12]);
   beam(b, [20, 0, 64], [20, 6.5, 64], 0.18, ROCK);
   seg2(b, 62.5, 0.55, 0.55, 5.6, 64.2, 0.16, 0.16, 5.6, [0.98, 0.48, 0.12], 20, 20);
   return R.makeMesh(b);
@@ -468,54 +589,106 @@ export const HOME_TERRAIN = {
     { x: -30, z: 195, r: 85, y: 0.017, kind: 'grass' },
   ],
   cones: [
-    { x: -150, z: -300, r: 55, h: 15, kind: 'hill' },
-    { x: 150, z: -275, r: 48, h: 11, kind: 'hill' },
-    { x: -145, z: 185, r: 50, h: 9, kind: 'hill' },
-    { x: 120, z: 150, r: 40, h: 6, kind: 'grass' },
-    { x: -70, z: -330, r: 34, h: 4, kind: 'grass' },
-    // Real mountains (v12): volcanic cones two to three times the hills'
-    // height, standing well clear of the strip corridor and the climb-
-    // out line — landmarks on the horizon, never obstacles in it. The
-    // deck-burial rule still holds: none of them reaches the footprint.
-    { x: -265, z: -430, r: 95, h: 36, kind: 'mountain' },
-    { x: 245, z: -395, r: 85, h: 30, kind: 'mountain' },
-    { x: -240, z: 275, r: 75, h: 24, kind: 'mountain' },
-    { x: 210, z: 300, r: 60, h: 18, kind: 'hill' },
+    { x: -150, z: -300, r: 55, h: 15, kind: 'hill', seed: 3.1 },
+    { x: 150, z: -275, r: 48, h: 11, kind: 'hill', seed: 5.7 },
+    { x: -145, z: 185, r: 50, h: 9, kind: 'hill', seed: 8.3 },
+    { x: 120, z: 150, r: 40, h: 6, kind: 'grass', seed: 2.9 },
+    { x: -70, z: -330, r: 34, h: 4, kind: 'grass', seed: 6.1 },
+    // Real mountains (v12, reshaped v13): volcanic landforms two to
+    // three times the hills' height, standing well clear of the strip
+    // corridor and the climb-out line — landmarks on the horizon, never
+    // obstacles in it. The deck-burial rule still holds: none of them
+    // reaches the footprint.
+    { x: -265, z: -430, r: 95, h: 36, kind: 'mountain', seed: 4.7 },
+    { x: 245, z: -395, r: 85, h: 30, kind: 'mountain', seed: 9.2 },
+    { x: -240, z: 275, r: 75, h: 24, kind: 'mountain', seed: 1.3 },
+    { x: 210, z: 300, r: 60, h: 18, kind: 'hill', seed: 7.9 },
   ],
 };
 // The terrain's top height at a point: the highest shape covering it,
-// or -1 for open sea. Cones stand on a 0.01 base (their skirts meet the
-// sand lobes) and rise linearly to the apex.
+// or -1 for open sea. Discs are flat at their table height; landforms
+// rise on the shared landform curve (landformHeightAt), so the height
+// the logic reads is the height the mesh draws.
 export function terrainHeightAt(x, z) {
   let top = -1;
   for (const d of HOME_TERRAIN.discs) {
     if (Math.hypot(x - d.x, z - d.z) <= d.r) top = Math.max(top, d.y);
   }
   for (const c of HOME_TERRAIN.cones) {
-    const dist = Math.hypot(x - c.x, z - c.z);
-    if (dist <= c.r) top = Math.max(top, 0.01 + c.h * (1 - dist / c.r));
+    const h = landformHeightAt(x, z, c);
+    if (h > 0) top = Math.max(top, h);
   }
   return top;
+}
+
+// The sea's land mask (v13): every shoreline circle the swell must
+// respect, in world coordinates, for a given leg — the home island's
+// discs and landform skirts, the destination island and its apron, and
+// the en-route islets (positions mirroring the scene's islet table).
+// The sea shader sinks and calms inside these circles, so waves exist
+// only where water actually is. Exported pure so the logic suite can
+// prove the airfield and the aprons sit fully inside the mask.
+export function seaLandCircles(legDist) {
+  const cs = [];
+  for (const d of HOME_TERRAIN.discs) cs.push([d.x, d.z, d.r]);
+  for (const c of HOME_TERRAIN.cones) cs.push([c.x, c.z, c.r * 1.18]);
+  const dz = -legDist - 72; // the destination island's drawn centre
+  cs.push([0, dz, 84]);
+  cs.push([0, -legDist + 20, 62]);
+  cs.push([0, -legDist + 105, 62]);
+  cs.push([0, -legDist + 190, 62]);
+  cs.push([-170, -legDist * 0.3, 19]);
+  cs.push([210, -legDist * 0.55, 24]);
+  cs.push([-240, -legDist * 0.78, 18]);
+  return cs;
 }
 
 export function buildHomeTerrain(R) {
   const b = new Builder();
   const SANDS = [SAND, [0.90, 0.74, 0.48], SAND];
   const GREENS = [GREEN, GREEN2, [0.30, 0.54, 0.29]];
+  const SKIRT_SAND = [0.72, 0.58, 0.38], SKIRT_SOIL = [0.40, 0.33, 0.22];
   let si = 0, gi = 0;
   for (const d of HOME_TERRAIN.discs) {
-    b.disc(d.x, d.y, d.z, d.r, 30, d.kind === 'sand' ? SANDS[si++ % SANDS.length] : GREENS[gi++ % GREENS.length]);
+    const isSand = d.kind === 'sand';
+    b.disc(d.x, d.y, d.z, d.r, 30, isSand ? SANDS[si++ % SANDS.length] : GREENS[gi++ % GREENS.length]);
+    // The skirt (v13): every lobe is a solid landmass with a bank down
+    // into the sea, not a paper sheet floating on the swell — from the
+    // cockpit's grazing angle the island now has an edge with depth.
+    skirtRing(b, d.x, d.z, d.r, d.y, -1.25, isSand ? SKIRT_SAND : SKIRT_SOIL, 30);
   }
+  // The hills and mountains are landforms now (v13): smooth multi-lobe
+  // domes and cratered volcanoes built from the same table the height
+  // function reads — no more bare cones parked on the grass.
   for (const c of HOME_TERRAIN.cones) {
-    if (c.kind === 'mountain') {
-      // A volcano's profile: a broad forested base, a bare rock shoulder,
-      // and a pale cap — three stacked cones reading as one great peak.
-      b.cone(c.x, 0.01, c.z, c.r, c.h * 0.62, 11, [0.30, 0.44, 0.28]);
-      b.cone(c.x, 0.01 + c.h * 0.55, c.z, c.r * 0.52, c.h * 0.34, 10, [0.42, 0.40, 0.38]);
-      b.cone(c.x, 0.01 + c.h * 0.84, c.z, c.r * 0.20, c.h * 0.16, 9, [0.80, 0.82, 0.85]);
-      continue;
+    buildLandform(b, c.x, c.z, c.r, c.h, c.seed, c.kind, 0.01);
+  }
+  // Foam lines (v13): a segment of pale surf survives only where it
+  // truly borders open water — on the UNION shoreline of the sand
+  // lobes. A segment whose midpoint lies deep inside another lobe is
+  // inland and is skipped, so no foam ever crosses the airfield.
+  const sandLobes = HOME_TERRAIN.discs.filter(d => d.kind === 'sand');
+  for (const d of sandLobes) {
+    const SEG = 44, rr = d.r + 1.2;
+    for (let i = 0; i < SEG; i++) {
+      const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+      const am = (a0 + a1) / 2, mx = d.x + Math.cos(am) * rr, mz = d.z + Math.sin(am) * rr;
+      let inland = false;
+      for (const o of HOME_TERRAIN.discs) {
+        if (o !== d && Math.hypot(mx - o.x, mz - o.z) < o.r - 3) { inland = true; break; }
+      }
+      if (inland) continue;
+      const p = (a, r) => [d.x + Math.cos(a) * r, 0.045, d.z + Math.sin(a) * r];
+      b.quad(p(a0, rr), p(a1, rr), p(a1, rr + 3.2), p(a0, rr + 3.2), FOAM);
     }
-    b.cone(c.x, 0.01, c.z, c.r, c.h, 10, c.kind === 'hill' ? [0.36, 0.46, 0.30] : GREEN2);
+  }
+  // Mow bands (v13): lighter stripes mown into the grass shoulders
+  // flanking the strip, the way a real field is kept — they run the
+  // strip's whole working length and stop at its corridor.
+  for (const sx of [-1, 1]) {
+    for (let i = 0; i < 7; i++) {
+      b.box(sx * 41, 0.024, -215 + i * 46, 34, 0.028, 23, i % 2 ? [0.31, 0.55, 0.29] : [0.26, 0.49, 0.26]);
+    }
   }
   // Palms dress the grass lobes — never the corridor, never the apron.
   const rnd = mulberry32(4242);
@@ -523,6 +696,26 @@ export function buildHomeTerrain(R) {
     [80, -230, 4.4], [130, 40, 5.6], [-60, -350, 4.8], [40, -375, 4.1], [-160, 120, 5.2],
     [150, 175, 4.5], [-45, 235, 5.0], [95, 215, 4.3], [165, -320, 5.3], [-185, -60, 4.7]]) {
     palm(b, x, z, h, rnd);
+  }
+  // Grass tufts and worn soil (v13): the field's ground cover — small
+  // dark tufts scattered over the grass lobes by a stable hash, and
+  // bare-earth patches where feet and wheels wear the turf. All placed
+  // clear of the strip corridor and the apron.
+  const trnd = mulberry32(777001);
+  for (const d of HOME_TERRAIN.discs) {
+    if (d.kind !== 'grass') continue;
+    for (let i = 0; i < 13; i++) {
+      const a = trnd() * Math.PI * 2, fr = 0.25 + trnd() * 0.62;
+      const x = d.x + Math.cos(a) * d.r * fr, z = d.z + Math.sin(a) * d.r * fr;
+      if (Math.abs(x) < 24 && z > -285 && z < 115) continue; // the corridor stays clean
+      b.cone(x, d.y + 0.004, z, 0.34 + trnd() * 0.2, 0.5 + trnd() * 0.35, 4, [0.17, 0.36, 0.19]);
+    }
+    for (let i = 0; i < 2; i++) {
+      const a = trnd() * Math.PI * 2, fr = 0.3 + trnd() * 0.5;
+      const x = d.x + Math.cos(a) * d.r * fr, z = d.z + Math.sin(a) * d.r * fr;
+      if (Math.abs(x) < 26 && z > -285 && z < 115) continue;
+      b.disc(x, d.y + 0.003, z, 3.5 + trnd() * 4.5, 9, [0.47, 0.38, 0.25]); // worn soil
+    }
   }
   // Rock outcrops where the lobes meet the sea.
   b.cone(170, 0.02, -50, 9, 2.6, 6, ROCK);
@@ -539,10 +732,27 @@ export function buildHomeTerrain(R) {
 export function buildShallows(R) {
   const b = new Builder();
   const AQUA = [0.40, 0.76, 0.72];
-  b.disc(0, 0.0015, 95, 172, 30, AQUA);
-  b.disc(0, 0.0015, -70, 196, 30, AQUA);
-  b.disc(0, 0.0015, -235, 164, 30, AQUA);
-  b.disc(0, 0.0015, -352, 110, 30, AQUA);
+  // The shelf hugs the land (v13): radii only ~12 m past the sand lobes
+  // they serve, and the sea beneath is pinned calm by the land mask, so
+  // the pale water reads as shallows — never as a sheet over the swell.
+  b.disc(0, 0.0015, 95, 163, 30, AQUA);
+  b.disc(0, 0.0015, -70, 188, 30, AQUA);
+  b.disc(0, 0.0015, -235, 153, 30, AQUA);
+  b.disc(0, 0.0015, -352, 101, 30, AQUA);
+  return R.makeMesh(b);
+}
+
+// The destination's own shelf (v13): one lagoon disc around the island
+// and one along its apron — shaped for THAT shore, not borrowed from
+// the home island's lobes the way v11 shipped it.
+export function buildDestShallows(R) {
+  const b = new Builder();
+  const AQUA = [0.40, 0.76, 0.72];
+  // Local origin = the island's drawn centre (the scene composes this
+  // mesh there); the strip apron lies ~160 m along +Z of it.
+  b.disc(0, 0.0015, 0, 96, 30, AQUA);
+  b.disc(0, 0.0015, 120, 62, 24, AQUA);
+  b.disc(0, 0.0015, 195, 56, 24, AQUA);
   return R.makeMesh(b);
 }
 
@@ -552,20 +762,32 @@ export function buildAirport(R) {
   const b = new Builder();
   const WALL = [0.92, 0.88, 0.80], ROOF = [0.62, 0.25, 0.14], GLASS = [0.15, 0.35, 0.45];
   const WIN = [1.30, 1.02, 0.50]; // lit windows: emissive past 1.0, they glow at night
-  b.box(34, 3, -6, 20, 6, 9, WALL); // terminal
-  b.box(34, 6.6, -6, 22, 1.2, 11, ROOF);
-  b.box(34, 3.4, -11.2, 14, 2.6, 0.6, GLASS); // terminal windows
-  for (const wx of [28.5, 34, 39.5]) b.box(wx, 3.2, -11.55, 2.6, 1.7, 0.18, WIN); // lit panes over the glass
-  for (const wz of [-9, -6, -3]) b.box(44.15, 3.4, wz, 0.18, 1.6, 2.2, WIN); // lit panes on the flank too
-  b.box(46, 7.5, 8, 3.2, 15, 3.2, WALL); // tower shaft
-  b.box(46, 15.8, 8, 5.4, 2.4, 5.4, GLASS); // tower cab
-  b.box(46, 15.8, 5.2, 4.6, 1.8, 0.3, WIN); // the cab's lit face, watching the strip
-  b.box(46, 17.4, 8, 6, 0.8, 6, ROOF);
-  b.box(46, 18.1, 8, 0.55, 0.55, 0.55, [2.3, 0.35, 0.30]); // the tower beacon, burning red
+  // The terminal (v13): a real airport building now — a long two-storey
+  // block with a full glass band facing the apron, a roof overhang, an
+  // entrance canopy, and a sign band whose micro-bars fake the lettering
+  // the way the plane's registration does.
+  b.box(34, 3.75, -6, 30, 7.5, 11, WALL); // terminal block
+  b.box(34, 7.9, -6, 32, 0.9, 13, ROOF); // roof slab with overhang
+  b.box(34, 4.6, -11.7, 26, 3.0, 0.5, GLASS); // the glass band
+  for (const wx of [24, 29.5, 35, 40.5]) b.box(wx, 4.6, -12.0, 3.4, 2.2, 0.18, WIN); // lit panes
+  for (const wx of [25.5, 31, 36.5, 42]) b.box(wx, 6.6, -11.55, 2.2, 1.0, 0.16, WIN); // upper lit row
+  b.box(34, 6.9, -11.62, 24, 0.85, 0.14, [0.16, 0.30, 0.44]); // sign band
+  for (let i = 0; i < 11; i++) b.box(23.4 + i * 1.95, 6.9, -11.72, 1.05, 0.5, 0.06, [1.15, 1.02, 0.72]); // sign lettering, faked
+  b.box(34, 2.6, -13.6, 16, 0.35, 4.2, [0.45, 0.38, 0.32]); // entrance canopy
+  for (const px of [27, 41]) b.box(px, 1.2, -15.2, 0.35, 2.4, 0.35, [0.55, 0.56, 0.60]); // canopy posts
+  for (const wz of [-9, -6, -3]) b.box(49.15, 3.6, wz, 0.18, 1.7, 2.4, WIN); // lit panes on the flank too
+  b.box(46, 8.5, 8, 3.4, 17, 3.4, WALL); // tower shaft, taller (v13)
+  b.box(46, 17.8, 8, 5.8, 2.6, 5.8, GLASS); // tower cab
+  b.box(46, 17.8, 5.0, 4.8, 1.9, 0.3, WIN); // the cab's lit face, watching the strip
+  b.box(46, 19.5, 8, 6.4, 0.8, 6.4, ROOF);
+  // (The tower beacon is a separate scene-drawn mesh now — it blinks.)
   b.box(24, 2.5, 16, 12, 5, 8, [0.55, 0.58, 0.62]); // hangar
   b.cone(24, 5, 16, 6.4, 2.2, 4, ROOF);
-  b.box(16, 1.7, 31, 8, 3.4, 6, [0.60, 0.62, 0.66]); // a second, smaller hangar
-  b.cone(16, 3.4, 31, 4.6, 1.6, 4, ROOF);
+  b.box(24, 1.9, 11.8, 9.5, 3.8, 0.3, [0.30, 0.33, 0.38]); // hangar door face (v13)
+  b.box(14, 2.1, 33, 10, 4.2, 7, [0.60, 0.62, 0.66]); // the second hangar, grown (v13)
+  b.cone(14, 4.2, 33, 5.6, 1.9, 4, ROOF);
+  b.box(14, 1.7, 29.3, 7.5, 3.4, 0.3, [0.30, 0.33, 0.38]); // its door face
+  b.box(40, 1.8, 24, 8, 3.6, 6, WALL); // cargo shed
   b.box(40, 1.8, 24, 8, 3.6, 6, WALL); // cargo shed
   // Freight waiting on the apron: crates and fuel drums by the shed.
   b.box(37.5, 0.55, 29.5, 1.1, 1.1, 1.1, [0.62, 0.52, 0.38]);
@@ -594,6 +816,21 @@ export function buildAirport(R) {
     b.box(lx, 3.4, lz, 0.24, 6.8, 0.24, [0.55, 0.56, 0.60]);
     b.box(lx, 7.0, lz, 1.1, 0.5, 1.1, [2.3, 1.9, 1.1]); // the apron lamp
   }
+  // Ground life (v13): a baggage-cart train waiting by the terminal, a
+  // fuel truck at the farm, traffic cones on the working apron, and a
+  // car park slab with three little cars by the depot wing.
+  for (let i = 0; i < 3; i++) {
+    b.box(28 + i * 2.6, 0.55, -16.5, 2.2, 1.1, 1.5, [0.62, 0.52, 0.38]);
+    b.box(28 + i * 2.6, 0.18, -16.5, 2.3, 0.3, 1.6, [0.25, 0.25, 0.28]);
+  }
+  b.box(56, 1.0, -28, 5.4, 2.0, 2.2, [0.85, 0.83, 0.78]); // fuel truck tank
+  b.box(56, 1.1, -24.9, 4.4, 1.1, 1.6, [0.30, 0.36, 0.42]); // fuel truck cab
+  for (const [cx, cz] of [[20, 26], [30, 30], [48, 18], [52, 30]]) b.cone(cx, 0.02, cz, 0.42, 0.8, 6, [0.95, 0.48, 0.12]);
+  b.box(56, 0.04, 38, 13, 0.08, 8, [0.30, 0.30, 0.33]); // car park slab
+  for (const [cx, cc] of [[52, [0.70, 0.25, 0.18]], [56.5, [0.25, 0.40, 0.65]], [61, [0.85, 0.83, 0.78]]]) {
+    b.box(cx, 0.55, 38, 3.4, 0.9, 1.7, cc);
+    b.box(cx, 1.15, 38, 1.9, 0.5, 1.55, [0.20, 0.26, 0.32]);
+  }
   return R.makeMesh(b);
 }
 
@@ -620,35 +857,178 @@ export function buildGateMesh(R) {
   return R.makeMesh(b);
 }
 
-// A house: walls, a pyramid roof, a door shadow, one lit window. Baked into
+// The explosion (v13): presentation for the high-energy crash only —
+// flight.js decides (crashExplodes); the scene merely shows it. A hot
+// emissive core that blooms and dies in the first second, a smoke
+// column that keeps rising and thinning after it, and debris chunks
+// scattered on ballistic arcs by the draw code. Flat-shaded and
+// emissive, in the game's own visual language.
+export function buildExplosion(R) {
+  const core = new Builder();
+  core.disc(0, 0.4, 0, 3.2, 12, [2.6, 1.5, 0.45]);
+  core.cone(0, 0.2, 0, 2.6, 4.6, 10, [2.4, 1.1, 0.30]);
+  core.cone(0, 0.2, 0, 1.7, 7.2, 8, [2.2, 0.75, 0.22]);
+  const smoke = new Builder();
+  smoke.cone(0, 0, 0, 3.4, 9, 9, [0.16, 0.15, 0.16]);
+  smoke.cone(0, 6.5, 0, 2.5, 8, 8, [0.22, 0.21, 0.22]);
+  smoke.cone(0, 13, 0, 1.7, 7, 7, [0.28, 0.27, 0.28]);
+  const debris = new Builder();
+  const rnd = mulberry32(31337);
+  for (let i = 0; i < 9; i++) {
+    const a = rnd() * Math.PI * 2, rr = 1 + rnd() * 3;
+    debris.box(Math.cos(a) * rr, 0.4 + rnd() * 1.4, Math.sin(a) * rr,
+      0.5 + rnd() * 0.8, 0.35 + rnd() * 0.5, 0.5 + rnd() * 0.8,
+      i % 3 ? [0.30, 0.16, 0.10] : [1.9, 0.9, 0.30]);
+  }
+  return { core: R.makeMesh(core), smoke: R.makeMesh(smoke), debris: R.makeMesh(debris) };
+}
+
+// ---- small living-world props (v13), drawn dynamic by the scene ----
+// A bird: two wing quads and a body sliver — a suggestion at distance,
+// flapped by rolling the whole mesh as it circles its thermal.
+export function buildBird(R) {
+  const b = new Builder();
+  const C = [0.20, 0.18, 0.20];
+  b.quad([-1.5, 0, -0.25], [0, 0.12, 0], [0, 0.12, 0.35], [-1.5, 0, 0.45], C);
+  b.quad([0, 0.12, 0], [1.5, 0, -0.25], [1.5, 0, 0.45], [0, 0.12, 0.35], C);
+  b.box(0, 0, 0.05, 0.22, 0.16, 1.1, C);
+  return R.makeMesh(b);
+}
+// The tower beacon: one emissive cube, blinked by the scene's alpha.
+export function buildBeacon(R) {
+  const b = new Builder();
+  b.box(0, 0, 0, 0.62, 0.62, 0.62, [2.6, 0.40, 0.32]);
+  return R.makeMesh(b);
+}
+// The terminal flag: an Indonesian red-over-white on its pole, waved by
+// the scene rocking it on its hoist.
+export function buildFlag(R) {
+  const b = new Builder();
+  b.box(0, 4.5, 0, 0.14, 9, 0.14, [0.55, 0.56, 0.60]);
+  b.quad([0.07, 9.0, 0], [0.07, 9.0, 2.6], [0.07, 8.05, 2.6], [0.07, 8.05, 0], [0.82, 0.16, 0.14]);
+  b.quad([0.07, 8.05, 0], [0.07, 8.05, 2.6], [0.07, 7.1, 2.6], [0.07, 7.1, 0], [0.94, 0.93, 0.90]);
+  return R.makeMesh(b);
+}
+// A service van with lit headlamps, driven around the apron by the scene.
+export function buildVan(R) {
+  const b = new Builder();
+  b.box(0, 0.85, 0, 2.1, 1.7, 4.8, [0.85, 0.83, 0.78]);
+  b.box(0, 1.15, -3.1, 1.9, 0.9, 1.4, [0.30, 0.36, 0.42]);
+  b.box(-0.7, 0.75, -3.85, 0.45, 0.3, 0.1, [2.2, 1.9, 1.2]);
+  b.box(0.7, 0.75, -3.85, 0.45, 0.3, 0.1, [2.2, 1.9, 1.2]);
+  return R.makeMesh(b);
+}
+// The windsock's cone alone: the pole is baked into the runway mesh;
+// the scene hangs this cone on it and lets the wind swing and lift it.
+// Built pointing +X (length along X, rings in the YZ plane) so a Z
+// rotation droops it and a Y rotation swings it downwind.
+export function buildSock(R) {
+  const b = new Builder();
+  const SEG = 8;
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    b.quad([0, Math.cos(a0) * 0.55, Math.sin(a0) * 0.55], [0, Math.cos(a1) * 0.55, Math.sin(a1) * 0.55],
+      [1.7, Math.cos(a1) * 0.16, Math.sin(a1) * 0.16], [1.7, Math.cos(a0) * 0.16, Math.sin(a0) * 0.16],
+      i % 2 ? [0.95, 0.93, 0.88] : [0.98, 0.48, 0.12]);
+  }
+  return R.makeMesh(b);
+}
+
+// The finale jet (v13): a wide-body airliner in an Emirates-inspired
+// livery — white fuselage, a gold cheatline, and a tail wearing the
+// UAE flag's green, red and black (inspired-by; no brand marks). She is
+// built at true airliner size next to the floatplanes: a ~26 m fuselage
+// on a ~24 m wing, four engines under the wing, a double-deck nose hump.
+// Same low-poly language as the fleet — shaped prisms, flat facets.
+export function buildJet(R) {
+  const b = new Builder();
+  const WHITE = [0.94, 0.94, 0.93], GOLD = [0.85, 0.65, 0.25], BELLY = [0.82, 0.82, 0.80];
+  const DARKWIN = [0.10, 0.14, 0.20];
+  const cy = 2.5; // fuselage centre height (gear bottoms rest at the -0.62 keel line)
+  // Fuselage: nose at -Z, eight sections swelling to a constant tube.
+  seg2(b, -13.2, 0.4, 0.4, cy - 0.3, -11.8, 1.9, 2.0, cy - 0.1, WHITE);
+  seg2(b, -11.8, 1.9, 2.0, cy - 0.1, -9.6, 3.1, 3.3, cy + 0.15, WHITE);
+  seg2(b, -9.6, 3.1, 3.3, cy + 0.15, -6.0, 3.9, 4.1, cy + 0.3, WHITE);
+  seg2(b, -6.0, 3.9, 4.1, cy + 0.3, 4.5, 4.1, 4.3, cy + 0.3, WHITE);
+  seg2(b, 4.5, 4.1, 4.3, cy + 0.3, 8.6, 3.6, 3.9, cy + 0.55, WHITE);
+  seg2(b, 8.6, 3.6, 3.9, cy + 0.55, 11.6, 2.2, 2.6, cy + 1.15, WHITE);
+  seg2(b, 11.6, 2.2, 2.6, cy + 1.15, 13.4, 0.7, 1.1, cy + 1.75, WHITE);
+  // The double-deck hump: a long fairing over the forward crown.
+  seg2(b, -11.4, 1.7, 1.1, cy + 1.85, -5.4, 2.6, 1.5, cy + 2.15, WHITE);
+  // Cockpit glass: a dark band wrapped over the nose.
+  seg2(b, -12.15, 2.05, 0.85, cy + 0.95, -10.9, 2.5, 0.95, cy + 1.05, DARKWIN);
+  // The window band: a long dark strip each side, and the gold cheatline
+  // running the fuselage's whole length beneath it.
+  for (const sx of [-1, 1]) {
+    b.box(sx * 2.03, cy + 0.95, -0.6, 0.05, 0.62, 17.5, DARKWIN);
+    b.box(sx * 2.04, cy + 0.28, -0.4, 0.05, 0.42, 19.5, GOLD);
+    b.box(sx * 1.55, cy + 1.9, 9.9, 0.04, 0.5, 2.6, GOLD); // gold sweeps up the tail cone
+  }
+  b.box(0, cy - 2.02, -0.4, 3.6, 0.18, 19.0, BELLY); // belly fairing line
+  // Wing: one great swept wing per side, two sections, gold-tipped.
+  for (const sx of [-1, 1]) {
+    segX(b, sx * 1.2, 5.6, 0.55, cy - 1.15, 0.8, sx * 7.2, 3.6, 0.38, cy - 0.75, 2.6, WHITE);
+    segX(b, sx * 7.2, 3.6, 0.38, cy - 0.75, 2.6, sx * 12.2, 1.9, 0.26, cy - 0.30, 4.3, WHITE);
+    b.box(sx * 12.35, cy + 0.25, 4.45, 0.14, 1.15, 1.5, GOLD); // winglet
+    // Four engines in all, two a side slung under the wing — big
+    // nacelles, dark intakes, gold lips.
+    for (const [ex, ez] of [[3.8, 1.0], [7.6, 2.6]]) {
+      b.box(sx * ex, cy - 2.0, ez - 0.6, 1.5, 1.5, 3.6, WHITE);
+      discXY(b, sx * ex, cy - 2.0, ez - 2.42, 0.68, 10, [0.06, 0.07, 0.09]);
+      b.box(sx * ex, cy - 1.18, ez - 0.6, 1.55, 0.16, 3.6, GOLD);
+    }
+  }
+  // Tailplane: swept, at the upswept cone's base.
+  for (const sx of [-1, 1]) {
+    segX(b, 0, 2.6, 0.3, cy + 1.35, 10.6, sx * 4.6, 1.6, 0.22, cy + 1.55, 11.4, WHITE);
+    segX(b, sx * 4.6, 1.6, 0.22, cy + 1.55, 11.4, sx * 6.4, 1.0, 0.16, cy + 1.70, 12.0, GOLD);
+  }
+  // The fin: tall, and wearing the flag — green at the leading top,
+  // red through the middle, black at the trailing base, on white.
+  b.frustum(0, cy + 4.6, 10.9, 0.34, 5.6, 4.4, 0.45, WHITE);
+  for (const sx of [-1, 1]) {
+    b.box(sx * 0.19, cy + 6.35, 10.15, 0.03, 1.55, 1.9, [0.10, 0.48, 0.28]); // green
+    b.box(sx * 0.19, cy + 5.30, 10.95, 0.03, 1.30, 2.6, [0.78, 0.14, 0.16]); // red
+    b.box(sx * 0.19, cy + 3.95, 11.95, 0.03, 1.15, 1.7, [0.08, 0.08, 0.09]); // black
+  }
+  // Gear suggestion: three bogies — she sits ON the deck at alt 0, so
+  // the bogies' bottoms ride at the floats' old -0.62 keel line.
+  for (const [gx, gz] of [[0, -8.6], [-1.15, 1.4], [1.15, 1.4]]) {
+    b.box(gx, -0.05, gz, 0.5, 1.1, 1.5, [0.20, 0.20, 0.22]);
+  }
+  const plane = R.makeMesh(b);
+  // No propeller: an empty mesh keeps the scene's prop draws harmless.
+  const empty = R.makeMesh(new Builder());
+  return { plane, prop: empty, disc: empty };
+}
 // island meshes so every shore carries its settlement.
-function house(b, x, z, s, rnd) {
+function house(b, x, z, s, rnd, y0 = 0) {
   const wall = [0.90, 0.82, 0.66], roof = [0.60 + rnd() * 0.15, 0.24, 0.13];
   const v = rnd();
   if (v < 0.22) {
     // The shop: a flat canopy awning over a wide lit front — the
     // settlement's one commercial silhouette among the homes.
-    b.box(x, 1.15 * s, z, 3.6 * s, 2.3 * s, 2.8 * s, wall);
-    b.box(x, 2.42 * s, z, 3.9 * s, 0.22 * s, 3.1 * s, [0.45, 0.38, 0.32]);
-    b.box(x, 1.95 * s, z - 1.75 * s, 3.8 * s, 0.14 * s, 1.15 * s, roof); // awning
-    b.box(x - 0.7 * s, 1.15 * s, z - 1.44 * s, 1.7 * s, 1.1 * s, 0.1, [1.30, 1.02, 0.50]); // lit shopfront
-    b.box(x + 1.15 * s, 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
+    b.box(x, y0 + 1.15 * s, z, 3.6 * s, 2.3 * s, 2.8 * s, wall);
+    b.box(x, y0 + 2.42 * s, z, 3.9 * s, 0.22 * s, 3.1 * s, [0.45, 0.38, 0.32]);
+    b.box(x, y0 + 1.95 * s, z - 1.75 * s, 3.8 * s, 0.14 * s, 1.15 * s, roof); // awning
+    b.box(x - 0.7 * s, y0 + 1.15 * s, z - 1.44 * s, 1.7 * s, 1.1 * s, 0.1, [1.30, 1.02, 0.50]); // lit shopfront
+    b.box(x + 1.15 * s, y0 + 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
     return;
   }
   if (v < 0.48) {
     // The two-storey variant: taller walls, a flat slab roof with a
     // parapet lip, and a lit window on each floor.
-    b.box(x, 1.7 * s, z, 3.2 * s, 3.4 * s, 2.8 * s, wall);
-    b.box(x, 3.5 * s, z, 3.7 * s, 0.25 * s, 3.3 * s, [0.45, 0.38, 0.32]);
-    b.box(x, 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
-    b.box(x + 0.9 * s, 1.1 * s, z - 1.44 * s, 0.55 * s, 0.6 * s, 0.1, [1.30, 1.02, 0.50]);
-    b.box(x - 0.9 * s, 2.6 * s, z - 1.44 * s, 0.55 * s, 0.6 * s, 0.1, [1.30, 1.02, 0.50]);
+    b.box(x, y0 + 1.7 * s, z, 3.2 * s, 3.4 * s, 2.8 * s, wall);
+    b.box(x, y0 + 3.5 * s, z, 3.7 * s, 0.25 * s, 3.3 * s, [0.45, 0.38, 0.32]);
+    b.box(x, y0 + 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
+    b.box(x + 0.9 * s, y0 + 1.1 * s, z - 1.44 * s, 0.55 * s, 0.6 * s, 0.1, [1.30, 1.02, 0.50]);
+    b.box(x - 0.9 * s, y0 + 2.6 * s, z - 1.44 * s, 0.55 * s, 0.6 * s, 0.1, [1.30, 1.02, 0.50]);
     return;
   }
-  b.box(x, 1.1 * s, z, 3.4 * s, 2.2 * s, 2.8 * s, wall);
-  b.frustum(x, 2.9 * s, z, 4.3 * s, 1.4 * s, 3.7 * s, 0.12, roof); // hip roof, aligned with the walls
-  b.box(x, 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
-  b.box(x + 0.95 * s, 1.25 * s, z - 1.44 * s, 0.55 * s, 0.6 * s, 0.1, [1.30, 1.02, 0.50]); // lit window
+  b.box(x, y0 + 1.1 * s, z, 3.4 * s, 2.2 * s, 2.8 * s, wall);
+  b.frustum(x, y0 + 2.9 * s, z, 4.3 * s, 1.4 * s, 3.7 * s, 0.12, roof); // hip roof, aligned with the walls
+  b.box(x, y0 + 0.8 * s, z - 1.45 * s, 0.8 * s, 1.6 * s, 0.15, [0.3, 0.2, 0.14]);
+  b.box(x + 0.95 * s, y0 + 1.25 * s, z - 1.44 * s, 0.55 * s, 0.6 * s, 0.1, [1.30, 1.02, 0.50]); // lit window
 }
 
 // Clouds: low-poly puffs — flattened box clusters in warm white. The field is
@@ -899,6 +1279,7 @@ export function createScene(R, assets) {
   const cam = { x: 0, alt: 6 };
   const projCache = { aspect: 0, m: null };
   let cloudCache = { leg: -1, field: [] };
+  let seaCache = { leg: -1, land: null };
   function draw(st) {
     const { canvas } = R;
     const aspect = canvas.width / canvas.height;
@@ -919,8 +1300,9 @@ export function createScene(R, assets) {
     const lookYaw = st.lookYaw || 0, lookPitch = st.lookPitch || 0;
     if (st.camMode === 'cockpit') {
       // Over the nose: the camera sits in the pilot's seat — no spring lag,
-      // the world answers the controls directly.
-      eye = [st.x, st.alt + 2.35, pz - 0.4];
+      // the world answers the controls directly. The seat is the
+      // airframe's own (v13): the flagship's deck sits far forward.
+      eye = [st.x, st.alt + (st.seatY ?? 2.35), pz + (st.seatZ ?? -0.4)];
       target = [st.x - st.bank * 3, st.alt + 1.15 + st.pitchVis * 6, pz - 40];
       cam.x = st.x * 0.84; cam.alt = st.alt + 5.4; // keep the chase spring warm
       if (lookYaw || lookPitch) {
@@ -934,10 +1316,14 @@ export function createScene(R, assets) {
         target = [eye[0] + d[0] * 40, eye[1] + d[1] * 40, eye[2] + d[2] * 40];
       }
     } else {
-      const back = st.camMode === 'far' ? 30 : (st.camBack || 16.5);
+      // The boom scales with the airframe (v13): the flagship is nearly
+      // four times the seaplanes' length, and a seaplane's camera distance
+      // puts the eye inside her tail.
+      const cm = st.camMul || 1;
+      const back = (st.camMode === 'far' ? 30 : (st.camBack || 16.5)) * cm;
       const up = st.camMode === 'far' ? 4.5 : (st.camUp || 0);
       cam.x = lerp(cam.x, st.x * 0.84, 0.06);
-      cam.alt = lerp(cam.alt, st.alt + 5.4, 0.08);
+      cam.alt = lerp(cam.alt, st.alt + 5.4 * cm, 0.08);
       eye = [cam.x, cam.alt + up, pz + back];
       // The aim point rides above the plane (she sits low in frame) and swings
       // with her pitch, so pitching visibly tilts the horizon and the sea.
@@ -957,6 +1343,13 @@ export function createScene(R, assets) {
         target = anchor;
       }
     }
+    // Camera shake (v13): a fresh explosion nearby rocks the frame —
+    // the boom's first two-thirds of a second only, decaying fast.
+    if (st.boom && st.boom.age < 0.7) {
+      const amp = (0.7 - st.boom.age) * 1.15;
+      eye = [eye[0] + Math.sin(st.time * 47) * amp * 0.35,
+        eye[1] + Math.sin(st.time * 39 + 1) * amp * 0.28, eye[2]];
+    }
     const view = M4.lookAt(eye, target, [0, 1, 0]);
     R.setCamera(view, projCache.m, eye);
     // The clock's environment drives every light in the frame.
@@ -971,7 +1364,7 @@ export function createScene(R, assets) {
     // used to pay their triangles on every frame of every flight for
     // nothing. (The departure runway below IS drawn: it is ahead of the
     // plane, under her, for the whole roll.)
-    R.draw(assets.isleDest, M4.compose(0, 0, -st.legDist - 72, 0, Math.PI, 0, 1.35));
+    R.draw(assets.isleDest, M4.compose(0, 0, -st.legDist - 72, 0, 0, 0, 1.35));
     for (const isl of assets.islets) {
       if (Math.abs(-st.legDist * isl.f - pz) > 1600) continue;
       R.draw(isl.mesh, M4.compose(isl.x, 0, -st.legDist * isl.f, 0, isl.rot, 0, isl.s));
@@ -985,6 +1378,12 @@ export function createScene(R, assets) {
     // instead of being shaded and then painted over.
     if (assets.homeTerrain && st.dist < 1000) {
       R.draw(assets.homeTerrain, M4.compose(0, 0, 0, 0, 0, 0));
+    }
+    // The home airport (v13): the same complex the destination wears,
+    // standing beside the departure strip's near end — visible down the
+    // right side during the roll and in every look back over the field.
+    if (assets.airport && st.dist < 1000) {
+      R.draw(assets.airport, M4.compose(4, 0, 88, 0, 0, 0));
     }
     // The departure runway: a paved strip on its own spit at the start of
     // every leg — she lines up on it, rolls it, and climbs out over the
@@ -1001,10 +1400,13 @@ export function createScene(R, assets) {
     // hides them, and the island's silhouette carries the landmark.
     const stripM = M4.compose(0, 0, -st.legDist + STRIP_LAYOUT.centreZ, 0, 0, 0);
     if (st.legDist - st.dist < 1600) R.draw(assets.strip, stripM);
-    // Airport buildings at the destination runway's far end. (No twin is
-    // drawn at the departure end: like the home island, it would stand
-    // behind every camera for the whole flight.)
+    // Airport buildings at the destination runway's far end, and the
+    // home twin beside the departure strip (drawn above).
     if (st.legDist - st.dist < 1400) R.draw(assets.airport, M4.compose(0, 0, -st.legDist - 14, 0, 0, 0));
+    // Living props at both airports (v13): the tower beacon blinks, the
+    // terminal flag stirs, and a service van works its apron loop.
+    drawAirportLife(R, assets, st, [4, 0, 88], st.dist < 1000);
+    drawAirportLife(R, assets, st, [0, 0, -st.legDist - 14], st.legDist - st.dist < 1400);
     // The sea comes AFTER the opaque world (v11 reorder): it follows the
     // camera in whole cells so the glitter never swims, and wherever
     // land, strips or buildings already wrote depth, its fragments are
@@ -1012,15 +1414,23 @@ export function createScene(R, assets) {
     // old sea-first order shade the same pixels two and three times.
     const snap = assets.sea.cell;
     const origin = [Math.round(eye[0] / snap) * snap, 0, Math.round(eye[2] / snap) * snap];
-    R.drawSea(assets.sea.mesh, origin, st.time);
+    // The sea respects the land (v13): the shoreline mask for this leg,
+    // rebuilt when the leg changes, and whitecaps while the weather is
+    // rough. Inside the mask the swell dies and sinks — waves belong
+    // to the water, never to the field.
+    if (seaCache.leg !== st.legDist) seaCache = { leg: st.legDist, land: seaLandCircles(st.legDist) };
+    const caps = st.env && st.env.state === 'storm' ? 1 : st.env && st.env.state === 'rain' ? 0.5
+      : st.env && st.env.state === 'overcast' ? 0.18 : 0;
+    R.drawSea(assets.sea.mesh, origin, st.time, { land: seaCache.land, caps });
     // The shallow shelves (v11) blend over the sea around both islands;
     // drawn in the transparent phase, the parts tucked under the terrain
-    // fail the depth test against it and cost nothing.
+    // fail the depth test against it and cost nothing. Each shore wears
+    // its OWN shelf shape (v13).
     if (assets.shallows && st.dist < 1000) {
       R.draw(assets.shallows, M4.compose(0, 0, 0, 0, 0, 0), 0.35);
     }
-    if (assets.shallows && st.legDist - st.dist < 1600) {
-      R.draw(assets.shallows, M4.compose(0, 0, -st.legDist - 72, 0, 0, 0), 0.35);
+    if (assets.destShallows && st.legDist - st.dist < 1600) {
+      R.draw(assets.destShallows, M4.compose(0, 0, -st.legDist - 72, 0, 0, 0), 0.35);
     }
     // Her light spill fades in with darkness: by night the lit edges and
     // the threshold halo are the approach's main landmark.
@@ -1039,6 +1449,51 @@ export function createScene(R, assets) {
     // stands at its own point until the camera has fired through it.
     if (st.pickup && assets.boat) {
       R.draw(assets.boat, M4.compose(st.pickup.x, 0, -st.pickup.dist, 0, 0.7, 0));
+    }
+    // Ambient sea traffic (v13): two launches working the lanes across
+    // the route, slow enough to read as life, far enough to never matter.
+    if (assets.boat) {
+      const b1x = -130 + ((st.time * 3.1) % 260), b1z = -st.legDist * 0.32;
+      if (Math.abs(b1z - pz) < 1300) R.draw(assets.boat, M4.compose(b1x, 0, b1z, 0, Math.PI / 2, 0));
+      const b2x = 140 - ((st.time * 2.3 + 90) % 280), b2z = -st.legDist * 0.68;
+      if (Math.abs(b2z - pz) < 1300) R.draw(assets.boat, M4.compose(b2x, 0, b2z, 0, -Math.PI / 2, 0));
+    }
+    // Birds (v13): a small flock circling a thermal beside the route,
+    // wings rocking as they ride it — the sky is not empty any more.
+    if (assets.bird) {
+      const bx = -85 + Math.sin(st.time * 0.10) * 22, by = 37 + Math.sin(st.time * 0.37) * 2.5;
+      const bz = -st.legDist * 0.45 + Math.sin(st.time * 0.06) * 45;
+      if (Math.abs(bz - pz) < 1100) {
+        const offs = [[0, 0, 0], [6, 1.5, 7], [-6, 1.5, 7], [12, 3, 14], [-12, 3, 14]];
+        for (let i = 0; i < offs.length; i++) {
+          const o = offs[i];
+          R.draw(assets.bird, M4.compose(bx + o[0], by + o[1], bz + o[2], 0, 0.3, Math.sin(st.time * 5.2 + i * 1.7) * 0.45));
+        }
+      }
+    }
+    // The windsock (v13) hangs on its pole by the departure threshold:
+    // it swings downwind and lifts as the weather's wind rises, and
+    // hangs limp when the air is still.
+    if (assets.sock && st.dist < 700) {
+      const wind = st.env ? (st.env.windMul || 0) : 0;
+      const lift = clamp(wind / 2.2, 0, 1);
+      const droop = -0.78 + lift * 0.66 + Math.sin(st.time * 1.7) * 0.05;
+      const swing = 0.7 + Math.sin(st.time * 0.9) * 0.16;
+      R.draw(assets.sock, M4.compose(20, 5.9, 64, 0, swing, droop));
+    }
+    // The explosion (v13): only a high-energy crash earns one (flight.js
+    // decided). The core blooms and dies inside a second; the smoke
+    // keeps climbing and thinning long after, over the receipt too.
+    if (st.boom && assets.boom) {
+      const age = st.boom.age, bx = st.boom.x, bz = -st.boom.dist;
+      if (age < 0.9) {
+        R.draw(assets.boom.core, M4.compose(bx, 0.3, bz, 0, st.time * 0.7, 0, 0.7 + age * 3.4), 0.95 * (1 - age / 0.9));
+        R.draw(assets.boom.debris, M4.compose(bx, Math.max(0, Math.sin(Math.min(age, 1.4) / 1.4 * Math.PI) * 2.4), bz, 0, 0, 0, 1 + age * 0.9), clamp(1 - age / 1.2, 0, 1));
+      }
+      if (age > 0.2 && age < 8) {
+        const sa = clamp(0.72 - (age - 0.2) * 0.075, 0.14, 0.72);
+        R.draw(assets.boom.smoke, M4.compose(bx, Math.min((age - 0.2) * 1.7, 4.5), bz, 0, 0, 0, 0.8 + age * 0.5), sa);
+      }
     }
     if (st.gate && assets.gate && !st.gate.passed) {
       R.draw(assets.gate, M4.compose(st.gate.x, st.gate.altM, -st.gate.dist, Math.PI / 2, 0, 0));
@@ -1133,4 +1588,36 @@ export function createScene(R, assets) {
     }
   }
   return { draw, snap };
+}
+
+// The airports' small life (v13), drawn per airport base transform:
+// the tower beacon flashes its short blink, the terminal flag rocks on
+// its hoist in the wind, and a service van drives a slow rectangle
+// around the apron with its headlamps lit. All cheap transforms of
+// three small meshes; nothing here touches the flight.
+function drawAirportLife(R, assets, st, base, inRange) {
+  if (!inRange) return;
+  const [bx, , bz] = base;
+  if (assets.beacon) {
+    const phase = (st.time * 0.7) % 1;
+    const a = phase < 0.14 ? 0.98 : 0.10;
+    R.draw(assets.beacon, M4.compose(bx + 46, 20.35, bz + 8, 0, 0, 0), a);
+  }
+  if (assets.flag) {
+    const sway = Math.sin(st.time * 1.9) * 0.10 + Math.sin(st.time * 3.7) * 0.04;
+    R.draw(assets.flag, M4.compose(bx + 24, 0, bz - 14, 0, sway, 0));
+  }
+  if (assets.van) {
+    // A rounded-rectangle loop on the apron, ~50 s a lap.
+    const per = [[16, 14], [54, 14], [54, 36], [16, 36]];
+    const segLen = [38, 22, 38, 22], total = 120;
+    let u = ((st.time * 2.4) % total + total) % total;
+    let i = 0;
+    while (u > segLen[i]) { u -= segLen[i]; i = (i + 1) % 4; }
+    const [x0, z0] = per[i], [x1, z1] = per[(i + 1) % 4];
+    const f = u / segLen[i];
+    const x = x0 + (x1 - x0) * f, z = z0 + (z1 - z0) * f;
+    const ry = Math.atan2(-(x1 - x0), -(z1 - z0));
+    R.draw(assets.van, M4.compose(bx + x, 0, bz + z, 0, ry, 0));
+  }
 }

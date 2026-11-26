@@ -116,13 +116,32 @@ void main(){ vec3 n = normalize(vNor);
   // Vertex colours pushed past 1.0 are lamps, lit windows and nav lights:
   // the excess is emissive, and it blooms as the world's light falls.
   c += max(vCol - vec3(1.0), vec3(0.0)) * uEmis;
+  // The grade (v13): a gentle saturation and warmth pass over the lit
+  // world — colours separate, shadows keep their blue, and the whole
+  // frame reads richer before the fog takes it.
+  float lum = dot(c, vec3(0.3333));
+  c = mix(vec3(lum), c, 1.13);
+  c = c * vec3(1.025, 1.0, 0.975) + vec3(0.008, 0.003, 0.0);
   float f = 1.0 - exp(-uFogD * uFogD * vDepth * vDepth);
   o = vec4(mix(c, uFog, clamp(f,0.0,1.0)), uAlpha); }`;
 const SEA_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 uniform mat4 uMVP; uniform vec3 uOrigin; uniform mediump float uTime;
-out vec3 vWorld; out float vWave;
+uniform vec4 uLand[32]; uniform int uLandN;
+out vec3 vWorld; out float vWave; out float vShore;
 void main(){ vec3 w = aPos + uOrigin;
+  // The land mask (v13): circles (xz centre, radius) for every landmass
+  // the sea must respect. Inside a shoreline the swell dies and the
+  // surface sinks below the terrain, so water can NEVER wash over a
+  // beach, an apron or a runway — the owner's sharpest v12 complaint.
+  // The influence also feeds the fragment shader's shallow tint.
+  float land = 0.0;
+  for (int i = 0; i < 32; i++) {
+    if (i >= uLandN) break;
+    vec4 L = uLand[i];
+    float d = distance(w.xz, L.xy);
+    land = max(land, 1.0 - smoothstep(L.z - 10.0, L.z + 26.0, d));
+  }
   // A gentle ocean swell (v12): two long waves crossing, crests under a
   // metre, wavelengths far longer than the mesh cell so the grid carries
   // them smoothly. Purely visual — the flight model's water stays at
@@ -130,18 +149,29 @@ void main(){ vec3 w = aPos + uOrigin;
   float hgt = sin(w.x * 0.045 + uTime * 1.05) * 0.30
             + sin(w.z * 0.036 - uTime * 0.80) * 0.30
             + sin((w.x + w.z) * 0.021 + uTime * 0.55) * 0.35;
-  w.y += hgt; vWave = hgt; vWorld = w; gl_Position = uMVP * vec4(w, 1.0); }`;
+  hgt *= mix(1.0, 0.10, smoothstep(0.0, 0.75, land)); // the swell dies at the shore
+  w.y += hgt;
+  // Near and under land the surface is pinned below the terrain tops
+  // (land discs sit at y 0.004..0.02, the deck at 0.01): pinned water
+  // hides under the landmass instead of cresting through it.
+  w.y = mix(w.y, min(w.y, -0.5), smoothstep(0.55, 0.95, land));
+  w.y = min(w.y, mix(3.0, -0.06, smoothstep(0.05, 0.5, land)));
+  vWave = hgt * (1.0 - land); vShore = land; vWorld = w; gl_Position = uMVP * vec4(w, 1.0); }`;
 const SEA_FS = `#version 300 es
 precision mediump float;
 uniform vec3 uSun; uniform vec3 uCam; uniform float uTime; uniform vec3 uFog; uniform float uFogD;
 uniform vec3 uDeep; uniform vec3 uLift; uniform vec3 uSparkle; uniform float uGlitter;
-uniform vec3 uSheen; uniform float uSheenI;
-in vec3 vWorld; in float vWave; out vec4 o;
+uniform vec3 uSheen; uniform float uSheenI; uniform float uCaps;
+in vec3 vWorld; in float vWave; in float vShore; out vec4 o;
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main(){
   vec3 V = normalize(uCam - vWorld);
   float dist = length(uCam - vWorld);
   vec3 c = mix(uLift, uDeep, clamp(dist / 900.0, 0.0, 1.0));
+  // Depth-graded shallows (v13): as the bottom rises toward a shore the
+  // water lightens toward pale aqua — the lagoon announces the land
+  // before the beach arrives, and open sea stays deep.
+  c = mix(c, vec3(0.36, 0.72, 0.68), clamp(vShore * 1.15 - 0.08, 0.0, 1.0) * 0.5);
   // Broad wave shading: a slow, large-cell mottling drifting with time,
   // so the surface carries swells instead of one flat tone between the
   // sparkles — the sea reads as moving water even where nothing glitters.
@@ -168,8 +198,18 @@ void main(){
   // A wide, soft sun path under the glitter streak: the whole lane toward
   // the sun lifts a little, so the glitter sits in a lit road of water.
   c += uSheen * (sa4 * sa) * 0.13 * uGlitter; // sa^5
+  // Whitecaps (v13): in hard weather the swell's crests break white —
+  // hashed flecks that live only on the highest water and only while
+  // uCaps (the weather's word) says the sea is rough.
+  if (uCaps > 0.01) {
+    vec2 capCell = floor(vWorld.xz * 0.55 + vec2(floor(uTime * 1.4), 0.0));
+    float cap = step(1.0 - 0.16 * uCaps, hash(capCell)) * smoothstep(0.45, 0.92, vWave);
+    c += vec3(0.85, 0.90, 0.92) * cap * 0.5 * uCaps;
+  }
   float fr = 1.0 - max(V.y, 0.0);
   c += uSheen * (fr * fr) * uSheenI; // light sheen at grazing angles
+  // The grade (v13), shared with the lit world: deeper, separated water.
+  c = mix(vec3(dot(c, vec3(0.3333))), c, 1.10);
   float f = 1.0 - exp(-uFogD * uFogD * dist * dist);
   o = vec4(mix(c, uFog, clamp(f, 0.0, 1.0)), 1.0); }`;
 const SKY_VS = `#version 300 es
@@ -199,6 +239,11 @@ void main(){ vec3 d = normalize(vDir);
   c += uDiscCol * (sd8 * sd8 * sd8) * 0.20 * uDiscI; // sd^24: the disc's near glow
   c += uHaloCol * (sd2 * sqrt(sd)) * 0.10 * uDiscI; // sd^2.5: a wide wash around it
   c += uHaloCol * pow(sd, 3.0) * 0.10 * uDiscI; // the far halo: half the sky leans toward the light
+  // Cirrus (v13): two faint high bands streaked across the upper sky,
+  // catching the sun's colour — the dome stops reading as bare gradient.
+  float cir = sin(d.y * 95.0 + sin(atan(d.z, d.x) * 2.0 + d.y * 6.0) * 1.6);
+  float cirrus = smoothstep(0.86, 0.995, cir) * smoothstep(0.10, 0.34, d.y) * (1.0 - smoothstep(0.55, 0.85, d.y));
+  c += (uHaloCol * 0.7 + vec3(0.30)) * cirrus * 0.055 * (0.35 + uDiscI * 0.65);
   // Stars: a hashed cell field, only above the horizon, only at night.
   if (uStars > 0.01) {
     vec3 cell = floor(d * 130.0);
@@ -301,10 +346,18 @@ function buildRenderer(canvas, gl) {
     gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
     if (alpha < 1) { gl.disable(gl.BLEND); gl.depthMask(true); }
   }
-  function drawSea(mesh, origin, time) {
+  function drawSea(mesh, origin, time, opts = {}) {
     gl.useProgram(sea);
     gl.uniformMatrix4fv(gl.getUniformLocation(sea, 'uMVP'), false, M4.mul(proj, view));
     gl.uniform3fv(gl.getUniformLocation(sea, 'uOrigin'), origin);
+    // The land mask (v13): up to 32 shoreline circles as (x, z, radius).
+    const land = opts.land || [];
+    const arr = new Float32Array(32 * 4);
+    const n = Math.min(land.length, 32);
+    for (let i = 0; i < n; i++) { arr[i * 4] = land[i][0]; arr[i * 4 + 1] = land[i][1]; arr[i * 4 + 2] = land[i][2]; }
+    gl.uniform4fv(gl.getUniformLocation(sea, 'uLand'), arr);
+    gl.uniform1i(gl.getUniformLocation(sea, 'uLandN'), n);
+    gl.uniform1f(gl.getUniformLocation(sea, 'uCaps'), opts.caps || 0);
     gl.uniform3fv(gl.getUniformLocation(sea, 'uSun'), env.sunDir);
     gl.uniform3fv(gl.getUniformLocation(sea, 'uCam'), camPos);
     gl.uniform1f(gl.getUniformLocation(sea, 'uTime'), time);

@@ -1,1 +1,1 @@
-[{"name":"1-cover.jpg","query":"?shot=title&seed=1"},{"name":"2-cockpit.jpg","query":"?shot=flight&seed=1&hour=10.5&wx=clear&cam=cockpit&look=100"},{"name":"3-hangar.jpg","query":"?shot=hangar&seed=1"},{"name":"4-night.jpg","query":"?shot=flight&seed=1&hour=21.3&at=approach"}]
+[{"name":"1-cover.jpg","query":"?shot=title&seed=1"},{"name":"2-map.jpg","query":"?shot=map&seed=1"},{"name":"3-hangar.jpg","query":"?shot=hangar&seed=1"},{"name":"4-jet.jpg","query":"?shot=flight&seed=1&hour=10.5&wx=clear&type=cargo&plane=raksasa"}]

@@ -35,6 +35,18 @@ export const RUNWAY_ACCEL = 0.55;
 export const LIFT_REF = 21; // m/s: lift balances weight at neutral pitch
 export const SINK_MAX = 5.4; // m/s of sink at zero lift (deep stall)
 export const CRASH_SINK = -6.0; // m/s: water contact harder than this ends the flight
+// The explosion (v13): a crash is not always a fireball. She burns only
+// when the impact carries real energy — a deep-stall arrival, or any
+// crash-sink arrival after a fall FROM HEIGHT (the power-loss plunge the
+// owner described). A controlled descent, a flare, a gentle settle or a
+// low ditching never explodes: the trigger is physics, not outcome text.
+export const EXPLODE_SINK = -7.5; // m/s at impact: deep enough to burst on its own
+export const EXPLODE_MIN_ALT = 18; // m: the fall must have started from up here
+export function crashExplodes(s) {
+  if (!s || s.outcome !== 'splash' || !s.touchdown) return false;
+  const vs = s.touchdown.vs;
+  return vs <= EXPLODE_SINK || (vs <= CRASH_SINK && (s.maxAlt || 0) >= EXPLODE_MIN_ALT);
+}
 
 export function createFlight(opts) {
   const legDist = opts.legDist;
@@ -53,10 +65,11 @@ export function createFlight(opts) {
     // and the mission objective riding this leg (rescue pickup / photo
     // gate), with the smoothness ledger passenger work is graded on.
     speedMul: opts.speedMul || 1, climbMul: opts.climbMul || 1,
+    accelMul: opts.accelMul || 1, // ground-roll character (the big jet spools long)
     respMul: opts.respMul || 1, assist: !!opts.assist,
     pickup: opts.pickup ? { ...opts.pickup } : null, pickedUp: false,
     gate: opts.gate ? { ...opts.gate, passed: false, missed: false } : null,
-    photoTaken: false, rough: 0, stalled: false,
+    photoTaken: false, rough: 0, stalled: false, exploded: false,
   };
 }
 
@@ -71,7 +84,7 @@ export function stepFlight(s, input, dt) {
   // deliberate roll (RUNWAY_ACCEL), open water keeps the old draggy run,
   // and in the air the engine answers at full rate.
   const onGround = s.alt <= 0.01;
-  const accel = !onGround ? 5.2 : (s.dist < s.runwayM ? RUNWAY_ACCEL : 3.4);
+  const accel = !onGround ? 5.2 : (s.dist < s.runwayM ? RUNWAY_ACCEL : 3.4) * s.accelMul;
   s.speed = lerp(s.speed, targetSpeed, clamp(dt * accel / 6, 0, 1));
   if (s.speed < 0.05 && input.throttle === 0) s.speed = 0;
 
@@ -108,6 +121,7 @@ export function stepFlight(s, input, dt) {
     s.done = true;
     s.outcome = 'splash';
     s.touchdown = { vs: s.vs, x: s.x, soft: 0, centre: centreScore(s.x), approach: approachScore(s) };
+    s.exploded = crashExplodes(s); // a plunge from height bursts; a ditch does not
     return s;
   }
   s.alt = Math.max(0, s.alt + s.vs * dt);
@@ -209,6 +223,7 @@ function finishFlight(s) {
   if (vs < roughLimit) {
     s.outcome = 'splash';
     s.touchdown = { vs, x: s.x, soft: 0, centre: centreScore(s.x), approach: approachScore(s) };
+    s.exploded = crashExplodes(s);
     return;
   }
   s.outcome = 'landed';

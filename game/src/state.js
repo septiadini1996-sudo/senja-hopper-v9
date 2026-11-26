@@ -25,7 +25,7 @@ export function defaultSave() {
     stats: { flights: 0, deliveries: 0, rings: 0, earned: 0, bestGrade: null,
       rescues: 0, stormRuns: 0, photos: 0, smoothRuns: 0 },
     challengesDone: [],
-    settings: { music: 3, sfx: 4, master: true, season: 'breezy', lang: 'en' },
+    settings: { music: 3, sfx: 4, radio: 4, master: true, season: 'breezy', lang: 'en' },
     scheme: null, // null = auto (touch-first on coarse pointers)
     handling: 'assisted', // 'assisted' (damped, self-levelling) or 'direct' (raw)
     camMode: 'near', // 'near' | 'far' | 'cockpit'
@@ -45,6 +45,13 @@ export function loadSave(storage) {
     const planes = { ...base.planes, ...(parsed.planes || {}) };
     if (!Array.isArray(planes.owned) || planes.owned.length === 0) planes.owned = [...base.planes.owned];
     if (!planes.owned.includes(planes.active)) planes.active = planes.owned[0];
+    // Finale grant on load (v13): a save that already holds every stamp
+    // (a finished v12 campaign, say) owns the flagship too — she was
+    // earned before the hangar knew her name.
+    const mergedStamps = Array.isArray(parsed.stamps) ? parsed.stamps : [];
+    if (mergedStamps.length >= ISLANDS.length - 1 && !planes.owned.includes('raksasa')) {
+      planes.owned.push('raksasa');
+    }
     return { ...base, ...parsed, settings: { ...base.settings, ...(parsed.settings || {}) },
       upgrades: { ...base.upgrades, ...(parsed.upgrades || {}) }, stats: { ...base.stats, ...(parsed.stats || {}) },
       planes };
@@ -55,7 +62,7 @@ export function loadSave(storage) {
 // storeSave; switching is free but only to a plane she owns.
 export function buyPlane(save, id) {
   const p = planeById(id);
-  if (!p || p.id !== id || save.planes.owned.includes(id) || save.saldo < p.price) return false;
+  if (!p || p.id !== id || p.finale || save.planes.owned.includes(id) || save.saldo < p.price) return false;
   save.saldo -= p.price;
   save.planes.owned.push(id);
   return true;
@@ -192,6 +199,12 @@ export function applyResult(save, ticket, flight, settle, challengeBonus) {
     if (ticket.main && ticket.to === save.islandIdx + 1) {
       if (!save.stamps.includes(ISLANDS[ticket.to].id)) save.stamps.push(ISLANDS[ticket.to].id);
       save.islandIdx = ticket.to;
+      // The finale (v13): the last stamp of the chain unlocks the
+      // flagship in the hangar — the campaign's own reward, no price.
+      if (save.stamps.length >= ISLANDS.length - 1 && !save.planes.owned.includes('raksasa')) {
+        save.planes.owned.push('raksasa');
+        save.jetUnlocked = true; // the receipt screen celebrates once
+      }
     }
   }
   save.day += 1;

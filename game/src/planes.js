@@ -7,17 +7,24 @@
 // before the pilot ever reaches the runway.
 export const PLANES = [
   // The starter: the cream-and-red floatplane she has always flown.
-  { id: 'kutilang', price: 0, speedMul: 1.00, climbMul: 1.00, capacity: 1,
+  { id: 'kutilang', callsign: 'PK-KTL', price: 0, speedMul: 1.00, climbMul: 1.00, accelMul: 1.00, capacity: 1,
     scale: 1.00, span: 1.00, body: [0.96, 0.86, 0.64], accent: [0.80, 0.22, 0.15], cheat: [0.09, 0.26, 0.31] },
   // A light, quick runabout: faster everywhere, carries no more.
-  { id: 'pipit', price: 170000, speedMul: 1.10, climbMul: 1.06, capacity: 1,
+  { id: 'pipit', callsign: 'PK-PPT', price: 170000, speedMul: 1.10, climbMul: 1.06, accelMul: 1.05, capacity: 1,
     scale: 0.94, span: 0.92, body: [0.92, 0.93, 0.95], accent: [0.15, 0.35, 0.75], cheat: [0.85, 0.55, 0.10] },
   // The falcon: the fast heavy lifter — speed and a class-2 hold.
-  { id: 'alap', price: 340000, speedMul: 1.24, climbMul: 1.18, capacity: 2,
+  { id: 'alap', callsign: 'PK-ALP', price: 340000, speedMul: 1.24, climbMul: 1.18, accelMul: 1.10, capacity: 2,
     scale: 1.02, span: 1.07, body: [0.25, 0.28, 0.33], accent: [0.95, 0.60, 0.12], cheat: [0.95, 0.60, 0.12] },
   // The stork: slow, vast, and the only class-3 hold in the islands.
-  { id: 'bangau', price: 520000, speedMul: 0.94, climbMul: 0.95, capacity: 3,
+  { id: 'bangau', callsign: 'PK-BNG', price: 520000, speedMul: 0.94, climbMul: 0.95, accelMul: 0.95, capacity: 3,
     scale: 1.17, span: 1.20, body: [0.88, 0.90, 0.88], accent: [0.10, 0.45, 0.35], cheat: [0.55, 0.20, 0.12] },
+  // The finale flagship (v13): a wide-body jet in an Emirates-inspired
+  // livery — never sold; she is UNLOCKED when the campaign's last stamp
+  // lands. Several times the floatplanes' size, the fastest airframe in
+  // the hangar, carries anything (class 4); her ground roll is scaled
+  // (accelMul) so she still lifts inside the certified deck.
+  { id: 'raksasa', callsign: 'PK-RKS', price: 0, speedMul: 1.38, climbMul: 1.22, accelMul: 0.52, capacity: 4,
+    finale: true, jet: true, camMul: 3.1, seatY: 4.6, seatZ: -11.4, scale: 1.00, span: 1.00, body: [0.94, 0.94, 0.93], accent: [0.85, 0.65, 0.25], cheat: [0.85, 0.65, 0.25] },
 ];
 export function planeById(id) {
   return PLANES.find(p => p.id === id) || PLANES[0];
