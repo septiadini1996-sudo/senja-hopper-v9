@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Senja Hopper — Pos Udara</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2a1626;
+    font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif; color: #fdf3df;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #ui { position: fixed; inset: 0; overflow: hidden; }
+  .screen { position: absolute; inset: 0; display: none; flex-direction: column;
+    align-items: center; padding: 18px 16px; box-sizing: border-box; overflow-y: auto; }
+  .screen.on { display: flex; }
+  .panel { background: rgba(24, 14, 22, 0.86); border: 1px solid rgba(255, 190, 110, 0.35);
+    border-radius: 14px; padding: 14px 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.45); }
+  h1.logo { font-size: 52px; letter-spacing: 3px; margin: 26px 0 2px; color: #ffd98f;
+    text-shadow: 0 3px 0 #a33d1c, 0 6px 22px rgba(0,0,0,0.6); font-weight: 800; text-align: center; }
+  .sub { font-size: 16px; letter-spacing: 4px; color: #ffcf9e; margin: 0 0 14px; text-transform: uppercase;
+    text-shadow: 0 1px 3px rgba(90, 30, 10, 0.85), 0 0 14px rgba(90, 30, 10, 0.45); font-weight: 700; }
+  h2.ptitle { font-size: 26px; letter-spacing: 2px; margin: 4px 0 12px; color: #ffd98f;
+    text-shadow: 0 2px 16px rgba(74, 26, 0, 0.65), 0 1px 4px rgba(74, 26, 0, 0.75); }
+  .btn { pointer-events: auto; cursor: pointer; border: 1px solid rgba(255, 200, 120, 0.55);
+    background: linear-gradient(180deg, rgba(122, 52, 26, 0.92), rgba(84, 32, 20, 0.92));
+    color: #ffe9c4; font: 700 16px/1.2 inherit; letter-spacing: 1.5px;
+    padding: 12px 22px; margin: 5px; border-radius: 10px; min-width: 230px; text-align: center; }
+  .btn:hover { filter: brightness(1.18); }
+  .btn:active { transform: translateY(1px); }
+  .btn.small { min-width: 0; padding: 9px 14px; font-size: 14px; }
+  .btn.primary { background: linear-gradient(180deg, #d97b2f, #b44f1d); color: #fff6e6; }
+  .btn[disabled] { opacity: 0.45; cursor: default; }
+  .btn.on { outline: 2px solid #ffd98f; background: linear-gradient(180deg, #e89a3f, #c25e20); }
+  .topchips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 10px; }
+  .chip { background: rgba(24, 14, 22, 0.85); border: 1px solid rgba(255, 190, 110, 0.4);
+    border-radius: 999px; padding: 6px 14px; font-size: 14px; letter-spacing: 1px; font-weight: 700; }
+  .chip b { color: #ffd98f; }
+  .objline { font-size: 15px; color: #ffe1ae; background: rgba(24,14,22,0.7); padding: 7px 16px;
+    border-radius: 999px; margin-bottom: 12px; letter-spacing: 0.5px; }
+  .card { width: min(620px, 94vw); margin: 7px 0; }
+  .card .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tag { font-size: 11px; font-weight: 800; letter-spacing: 1.5px; padding: 3px 9px; border-radius: 999px;
+    background: #b44f1d; color: #ffe9c4; }
+  .tag.side { background: #3d5a80; }
+  .route { font-size: 20px; font-weight: 800; color: #ffd98f; }
+  .meta { font-size: 13.5px; color: #f3d9b0; margin-top: 4px; line-height: 1.45; }
+  .pips { letter-spacing: 3px; color: #ffd98f; font-size: 15px; }
+  .segrow { display: flex; align-items: center; gap: 6px; }
+  .seg { width: 34px; height: 20px; border-radius: 5px; border: 1px solid rgba(255,200,120,0.5);
+    background: rgba(255,255,255,0.07); cursor: pointer; padding: 0; }
+  .seg.fill { background: linear-gradient(180deg, #f2a541, #cf6a1e); }
+  .seglabel { font-size: 13px; color: #f3d9b0; min-width: 34px; }
+  .setrow { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 9px 2px; border-bottom: 1px solid rgba(255,190,110,0.14); flex-wrap: wrap; }
+  .setrow:last-child { border-bottom: none; }
+  .setname { font-size: 15px; font-weight: 700; letter-spacing: 1px; }
+  /* ---------- flight HUD ---------- */
+  #hud { position: absolute; inset: 0; display: none; pointer-events: none; }
+  #hud.on { display: block; }
+  #hud .topbar { position: absolute; top: 10px; left: 12px; right: 12px; display: flex;
+    justify-content: space-between; align-items: flex-start; }
+  #hud .col { display: flex; flex-direction: column; gap: 6px; }
+  #hud .hchip { background: rgba(20, 12, 20, 0.78); border: 1px solid rgba(255,190,110,0.45);
+    border-radius: 9px; padding: 6px 12px; font-size: 14px; font-weight: 800; letter-spacing: 1px; }
+  #hud .hchip b { color: #ffd98f; }
+  #timer { font-size: 36px; font-weight: 800; color: #fff3da; background: rgba(20,12,20,0.78);
+    border: 1px solid rgba(255,190,110,0.5); border-radius: 12px; padding: 4px 20px; letter-spacing: 2px;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+  #pausebtn { pointer-events: auto; cursor: pointer; width: 52px; height: 52px; border-radius: 12px;
+    border: 1px solid rgba(255,190,110,0.55); background: rgba(20,12,20,0.82); color: #ffd98f;
+    font-size: 19px; font-weight: 900; }
+  #gauges { position: absolute; left: 12px; top: 118px; background: rgba(20,12,20,0.72);
+    border: 1px solid rgba(255,190,110,0.4); border-radius: 12px; }
+  #ribbon { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); width: 46px; height: 230px;
+    background: rgba(20,12,20,0.72); border: 1px solid rgba(255,190,110,0.4); border-radius: 9px; }
+  #ribbon .track { position: absolute; left: 50%; top: 8px; bottom: 8px; width: 4px; margin-left: -2px;
+    background: rgba(255,220,160,0.35); border-radius: 2px; }
+  #ribbon .marker { position: absolute; left: 50%; width: 22px; height: 10px; margin-left: -11px;
+    background: #f2a541; border-radius: 3px; box-shadow: 0 0 8px rgba(242,165,65,0.8); }
+  #ribbon .tick { position: absolute; right: 30px; transform: translateY(50%); font-size: 10.5px;
+    color: #f3d9b0; font-weight: 700; white-space: nowrap; }
+  #radar { position: absolute; left: 12px; top: 282px; border-radius: 50%;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
+  #cambtn { pointer-events: auto; cursor: pointer; border: 1px solid rgba(255,190,110,0.55);
+    background: rgba(20,12,20,0.82); color: #ffd98f; border-radius: 9px; padding: 7px 10px;
+    font: 800 11.5px inherit; letter-spacing: 0.5px; }
+  #cloudveil { position: absolute; inset: 0; background: #fdf6ec; opacity: 0; pointer-events: none; }
+  #rain { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+  #guide { position: absolute; left: 50%; bottom: 118px; transform: translateX(-50%);
+    background: rgba(20,12,20,0.85); border: 1px solid rgba(255,190,110,0.55); color: #ffe9c4;
+    border-radius: 999px; padding: 9px 20px; font-size: 17px; font-weight: 800; letter-spacing: 1px;
+    white-space: nowrap; }
+  #warn { position: absolute; left: 50%; bottom: 168px; transform: translateX(-50%); display: none;
+    background: rgba(150, 30, 20, 0.88); color: #ffe1ae; border-radius: 8px; padding: 6px 16px;
+    font-size: 14px; font-weight: 800; letter-spacing: 1px; }
+  /* ---------- flight controls ---------- */
+  .fctl { position: absolute; display: none; pointer-events: none; }
+  .fctl.on { display: block; }
+  .fbtn { pointer-events: auto; touch-action: none; cursor: pointer; position: absolute; width: 58px; height: 58px;
+    border-radius: 50%; border: 1px solid rgba(255,200,120,0.6); background: rgba(24,14,22,0.78);
+    color: #ffd98f; font-size: 21px; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+  .fbtn.held { background: rgba(217, 123, 47, 0.9); color: #fff; }
+  #pad { left: 14px; bottom: 14px; width: 186px; height: 132px; }
+  #thrbtns { right: 14px; bottom: 14px; width: 62px; height: 150px; }
+  #thrval { position: absolute; left: 0; right: 0; top: 64px; text-align: center; font-size: 13px;
+    font-weight: 800; color: #ffd98f; text-shadow: 0 1px 4px #000; }
+  #stick { left: 16px; bottom: 16px; width: 128px; height: 128px; border-radius: 50%;
+    border: 1px solid rgba(255,200,120,0.5); background: rgba(24,14,22,0.55); pointer-events: auto; touch-action: none; }
+  #knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px;
+    border-radius: 50%; background: radial-gradient(circle at 35% 30%, #f6c177, #b44f1d);
+    box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
+  #slider { right: 20px; bottom: 16px; width: 56px; height: 176px; pointer-events: auto; touch-action: none; }
+  #slider .rail { position: absolute; left: 50%; top: 0; bottom: 0; width: 10px; margin-left: -5px;
+    border-radius: 5px; background: rgba(24,14,22,0.7); border: 1px solid rgba(255,200,120,0.5); }
+  #slider .fill { position: absolute; left: 50%; bottom: 0; width: 10px; margin-left: -5px; border-radius: 5px;
+    background: linear-gradient(0deg, #cf6a1e, #f2a541); }
+  #slider .grip { position: absolute; left: 50%; width: 46px; height: 26px; margin-left: -23px; border-radius: 8px;
+    background: linear-gradient(180deg, #f6c177, #b44f1d); box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+  #slider .slabel { position: absolute; left: 0; right: 0; top: -20px; text-align: center; font-size: 11px;
+    font-weight: 800; letter-spacing: 1px; color: #ffd98f; text-shadow: 0 1px 4px #000; }
+  /* ---------- pause & receipt ---------- */
+  #pause { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(16, 8, 14, 0.55); flex-direction: column; z-index: 5; }
+  #pause.on { display: flex; }
+  .stamp { display: inline-block; border: 4px solid #c22e1c; color: #c22e1c; font-weight: 900;
+    font-size: 27px; letter-spacing: 3px; padding: 5px 18px; border-radius: 8px;
+    transform: rotate(-9deg); background: rgba(255, 240, 220, 0.92); margin: 8px 0; }
+  .gradebig { font-size: 64px; font-weight: 900; color: #ffd98f; text-shadow: 0 3px 0 #a33d1c; line-height: 1; }
+  .bar { height: 10px; border-radius: 5px; background: rgba(255,255,255,0.12); overflow: hidden; flex: 1; }
+  .bar i { display: block; height: 100%; background: linear-gradient(90deg, #cf6a1e, #f2c14e); }
+  .barow { display: flex; align-items: center; gap: 10px; margin: 5px 0; font-size: 13.5px; }
+  .barow span { width: 86px; text-align: right; color: #f3d9b0; }
+  .money { display: flex; justify-content: space-between; font-size: 15px; padding: 3.5px 0;
+    border-bottom: 1px dashed rgba(255,190,110,0.18); }
+  .money.total { font-size: 19px; font-weight: 900; color: #ffd98f; border-bottom: none; }
+  #toast { position: absolute; left: 50%; top: 84px; transform: translateX(-50%); display: none;
+    background: rgba(24,14,22,0.9); border: 1px solid rgba(255,190,110,0.5); color: #ffe9c4;
+    padding: 8px 18px; border-radius: 999px; font-weight: 700; z-index: 9; }
+  #nogl { display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
+    text-align: center; padding: 30px; font-size: 17px; background: #2a1626; z-index: 20; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-label="Senja Hopper: 3D seaplane mail over the Indonesian archipelago"></canvas>
+<div id="ui"></div>
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
