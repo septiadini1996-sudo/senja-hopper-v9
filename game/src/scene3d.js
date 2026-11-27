@@ -245,6 +245,102 @@ export function buildPlane(R, spec) {
   return { plane, prop, disc };
 }
 
+// The fighter (v17): RAJAWALI, a single-seat prop warbird — a sleeker,
+// longer-nosed body on a LOW cantilever wing, a bubble canopy, and
+// fixed landing gear where the floatplanes wear floats. No insignia,
+// no borrowed markings: olive drab over grey, a pale cheatline, and
+// her registration as micro-bars on the fin. Her wheels' soles sit at
+// y = -0.62, the fleet's ground line, so she stands on the runway
+// exactly where the floatplanes' keels rest. Same return contract as
+// buildPlane: { plane, prop, disc }, prop hub at the fleet's point.
+export function buildFighter(R, spec) {
+  const BODY = spec ? spec.body : [0.33, 0.36, 0.25];   // olive drab
+  const ACCENT = spec ? spec.accent : [0.62, 0.64, 0.58]; // grey
+  const CHEAT = spec ? spec.cheat : [0.78, 0.74, 0.55];  // pale stripe
+  const SPAN = spec ? spec.span : 1;
+  const b = new Builder();
+  // Fuselage: a longer, slimmer run than the mail planes — the nose
+  // stretches ahead of the wing, the tail cone rises to the fin.
+  seg2(b, -3.55, 0.20, 0.24, 1.00, -3.05, 0.66, 0.70, 1.00, BODY); // nose tip
+  seg2(b, -3.05, 0.66, 0.70, 1.00, -2.15, 0.98, 0.92, 1.01, BODY); // radial cowling
+  seg2(b, -2.15, 0.98, 0.92, 1.01, -0.95, 1.06, 1.00, 1.03, BODY); // forward fuselage
+  seg2(b, -0.95, 1.06, 1.00, 1.03, 0.85, 0.94, 0.90, 1.06, BODY);  // cockpit section
+  seg2(b, 0.85, 0.94, 0.90, 1.06, 2.35, 0.58, 0.62, 1.20, BODY);   // taper
+  seg2(b, 2.35, 0.58, 0.62, 1.20, 3.35, 0.26, 0.40, 1.36, BODY);   // tail cone, upswept
+  seg2(b, 3.35, 0.26, 0.40, 1.36, 3.90, 0.10, 0.22, 1.48, ACCENT); // tail tip
+  // Cowling detail: a dark chin intake and two exhaust stubs a side.
+  b.box(0, 0.52, -2.80, 0.44, 0.16, 0.60, [0.16, 0.15, 0.13]);
+  for (const sx of [-1, 1]) {
+    b.box(sx * 0.52, 0.72, -2.35, 0.11, 0.11, 0.44, RUBBER);
+    b.box(sx * 0.47, 0.74, -2.05, 0.26, 0.16, 0.50, [0.25, 0.22, 0.18]); // exhaust stain
+  }
+  // The bubble canopy: one clear teardrop over the single seat, a
+  // slim spine running back from it — a fighter's glasshouse, not a
+  // mail cabin's.
+  seg2(b, -0.82, 0.58, 0.40, 1.64, 0.58, 0.62, 0.44, 1.67, GLASS);
+  b.box(0, 1.62, 0.95, 0.20, 0.10, 0.85, BODY); // spine behind the bubble
+  // Livery: the pale cheatline low on each flank, and the fin flash.
+  for (const sx of [-1, 1]) b.box(sx * 0.485, 0.92, 0.35, 0.03, 0.13, 2.6, CHEAT);
+  // The low wing: cantilevered from the fuselage's belly, tapered
+  // and gently swept, grey tips — no struts, this wing carries
+  // itself. Gun barrels ride the leading edge, two a side, and the
+  // pitot stands under the port wing.
+  for (const sx of [-1, 1]) {
+    segX(b, 0, 1.80, 0.15, 0.62, -0.40, sx * 3.1 * SPAN, 1.52, 0.125, 0.66, -0.48, BODY);
+    segX(b, sx * 3.1 * SPAN, 1.52, 0.125, 0.66, -0.48, sx * 5.05 * SPAN, 1.16, 0.10, 0.74, -0.56, BODY);
+    segX(b, sx * 5.05 * SPAN, 1.16, 0.10, 0.74, -0.56, sx * 5.55 * SPAN, 0.98, 0.09, 0.78, -0.60, ACCENT);
+    b.box(sx * 1.55 * SPAN, 0.60, -1.28, 0.07, 0.07, 0.52, [0.12, 0.12, 0.12]); // gun barrel
+    b.box(sx * 2.15 * SPAN, 0.615, -1.24, 0.07, 0.07, 0.52, [0.12, 0.12, 0.12]); // gun barrel
+    b.box(sx * 1.05, 0.685, -0.40, 1.00, 0.025, 1.25, [0.28, 0.29, 0.24]); // wing-root walkway
+  }
+  b.box(-1.85 * SPAN, 0.44, -0.95, 0.05, 0.05, 0.55, METAL); // pitot, port wing
+  // Tail unit: a tapered tailplane with grey tips, a two-piece fin
+  // in grey with an olive flash, the rudder behind its hinge.
+  for (const sx of [-1, 1]) {
+    segX(b, 0, 1.00, 0.11, 1.56, 3.36, sx * 1.42, 0.80, 0.095, 1.62, 3.42, BODY);
+    segX(b, sx * 1.42, 0.80, 0.095, 1.62, 3.42, sx * 1.84, 0.64, 0.08, 1.66, 3.46, ACCENT);
+  }
+  b.frustum(0, 1.98, 3.30, 0.14, 1.10, 1.14, 0.50, ACCENT); // fin, lower
+  b.frustum(0, 2.80, 3.42, 0.12, 0.58, 0.74, 0.28, ACCENT); // fin, upper
+  b.box(0, 2.26, 3.34, 0.155, 0.20, 0.98, BODY); // fin flash
+  b.box(0, 2.06, 3.84, 0.09, 1.00, 0.32, [0.42, 0.44, 0.40]); // rudder
+  for (let i = 0; i < 4; i++) b.box(0.085, 2.42, 3.28 + i * 0.115, 0.02, 0.14, 0.05, [0.20, 0.20, 0.17]); // registration bars
+  // Navigation lights at the tips, landing lamp under the nose.
+  b.box(-5.60 * SPAN, 0.78, -0.60, 0.26, 0.12, 0.26, [1.7, 0.18, 0.12]);
+  b.box(5.60 * SPAN, 0.78, -0.60, 0.26, 0.12, 0.26, [0.20, 1.50, 0.35]);
+  b.box(0, 3.14, 3.48, 0.18, 0.11, 0.18, [1.5, 1.5, 1.4]);
+  b.box(0, 0.50, -3.30, 0.30, 0.12, 0.14, [1.9, 1.8, 1.5]);
+  // Fixed gear: two faired legs raked out from the wing roots to
+  // spatted wheels, and a small tail wheel — she is a landplane and
+  // stands like one. Main soles at y = -0.62, the fleet ground line.
+  for (const sx of [-1, 1]) {
+    beam(b, [sx * 0.52, 0.58, -0.72], [sx * 1.04, -0.28, -0.80], 0.13, BODY);
+    b.box(sx * 1.04, -0.40, -0.80, 0.20, 0.44, 0.46, RUBBER); // main wheel
+    b.box(sx * 1.04, -0.40, -0.80, 0.225, 0.20, 0.20, METAL); // hub
+    b.box(sx * 0.98, -0.06, -0.80, 0.10, 0.30, 0.40, BODY); // spat over the leg's foot
+  }
+  beam(b, [0, 1.06, 3.28], [0, 0.30, 3.42], 0.07, METAL); // tail-wheel leg
+  b.box(0, 0.20, 3.44, 0.11, 0.20, 0.22, RUBBER); // tail wheel
+  // Aerial mast and wire, pitot's mirror: the small truths.
+  b.box(0, 1.86, 1.55, 0.05, 0.26, 0.05, METAL);
+  beam(b, [0, 1.98, 1.55], [0, 3.02, 3.40], 0.016, [0.10, 0.10, 0.11]);
+  const plane = R.makeMesh(b);
+  const prop = buildPropMesh(R);
+  const d = new Builder();
+  const SEG = 24;
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    d.tri([0, 0, 0], [Math.cos(a0) * 2.18, Math.sin(a0) * 2.18, 0], [Math.cos(a1) * 2.18, Math.sin(a1) * 2.18, 0], [0.25, 0.2, 0.16]);
+  }
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    const p = (a, r) => [Math.cos(a) * r, Math.sin(a) * r, 0];
+    d.quad(p(a0, 1.98), p(a1, 1.98), p(a1, 2.18), p(a0, 2.18), [0.46, 0.38, 0.28]);
+  }
+  const disc = R.makeMesh(d);
+  return { plane, prop, disc };
+}
+
 // The propeller as its own builder so the blade layout reads plainly:
 // two tapered blades on the vertical axis, two on the horizontal, a
 // backplate disc and a spinner that cones to a point ahead of the nose.

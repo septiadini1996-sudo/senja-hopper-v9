@@ -159,6 +159,30 @@ export function morningBoard(save, daySeed) {
     } else if (roll < 0.30) type = 'passenger';
     applyType(tk, type, daySeed);
   }
+  // The weakest-setup guarantee (v17): whatever the dice dealt, at
+  // least two tickets on every board are flyable by the starter plane
+  // with an unworked hull — judged by ticketGate itself, so the board
+  // can never promise what the gate would refuse. The stamp run
+  // always qualifies; if both side jobs outgrew her, the last side
+  // job is re-dealt as light, fair work (its class premium and storm
+  // premium unwound) — a new pilot is never locked out of her own
+  // board. A pure function of the dealt board: determinism holds.
+  const weakestSave = { upgrades: { hull: 0 } };
+  const weakOk = (tk) => ticketGate(tk, planeById('kutilang'), weakestSave).ok;
+  if (tickets.filter(weakOk).length < 2) {
+    for (let i = tickets.length - 1; i >= 0 && tickets.filter(weakOk).length < 2; i--) {
+      const tk = tickets[i];
+      if (tk.main || weakOk(tk)) continue;
+      if ((tk.weight || 1) > 1) {
+        tk.pay = Math.round(tk.pay / (1 + 0.3 * (tk.weight - 1)) / 100) * 100;
+        tk.weight = 1;
+      }
+      if (tk.type === 'storm') {
+        tk.pay = Math.round(tk.pay / 1.5 / 100) * 100;
+        applyType(tk, 'cargo', daySeed);
+      }
+    }
+  }
   return tickets;
 }
 
@@ -184,6 +208,36 @@ export function applyType(tk, type, daySeed) {
     tk.cargoId = 'penumpang, bagasi ringan';
   }
   return tk;
+}
+
+// ---------- v17: the gate between a ticket and a plane ----------
+// Plane ↔ mission matching, judged in ONE place: the board reads this
+// verdict to badge and refuse, the tests pin it, and the board's own
+// weakest-setup guarantee above is dealt against it. Returns
+// { ok: true } or { ok: false, reason, need, have } with reason:
+//   'capacity' — the ticket's payload class outgrows the plane's hold
+//     (the v12 weight rule, now one verdict among three);
+//   'storm'    — storm work wants a class-2+ airframe OR a hull worked
+//     to level 2+ (the hangar's hull line is the other key);
+//   'flagship' — RAKSASA cannot work a boat pickup: a wide-body jet
+//     does not settle onto the sea beside a fishing boat.
+// The stamp run (ticket.main) is exempt from the storm gate, exactly
+// as it has always been exempt from payload class — the campaign's
+// spine never waits on a purchase or an upgrade.
+export const STORM_MIN_CLASS = 2;
+export const STORM_MIN_HULL = 2;
+export function ticketGate(ticket, plane, save) {
+  const need = ticket.weight || 1;
+  if (need > plane.capacity) return { ok: false, reason: 'capacity', need, have: plane.capacity };
+  if (ticket.type === 'storm' && !ticket.main
+      && plane.capacity < STORM_MIN_CLASS
+      && (((save && save.upgrades) || {}).hull || 0) < STORM_MIN_HULL) {
+    return { ok: false, reason: 'storm', need: STORM_MIN_CLASS, have: plane.capacity };
+  }
+  if (ticket.type === 'rescue' && plane.id === 'raksasa') {
+    return { ok: false, reason: 'flagship', need: 0, have: plane.capacity };
+  }
+  return { ok: true };
 }
 
 // Apply a settled flight to the save. Quitting mid-flight never calls this —

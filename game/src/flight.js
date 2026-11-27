@@ -445,8 +445,56 @@ export function objectiveState(s, ticket) {
   }
 }
 
+// ---------- v17: the right plane for the job pays ----------
+// Plane ↔ mission matching money, owned by ONE function: the board
+// quotes fitBonus before acceptance (main.js renders it on the
+// ticket) and settleFlight pays it after the landing, so the number
+// promised is the number banked. All fractions of the ticket's pay.
+//   PASSENGER: a comfort premium for a bigger hold — +10% per
+//     payload class above 1, capped at +30% (the flagship's rate).
+//   RESCUE / PHOTO / TIME-TRIAL: an agility premium of +20% for a
+//     class-1 plane — small wings work the boat, the gate, the clock.
+//   EXPRESS: a long-haul premium of +20% on legs of 2.5 km or more
+//     flown by a class-3+ plane.
+// Everything else (cargo, storm, short express, mismatched classes)
+// earns its face value, exactly as before v17.
+export const FIT_PASSENGER_PER_CLASS = 0.10;
+export const FIT_PASSENGER_CAP = 0.30;
+export const FIT_AGILITY_PCT = 0.20;
+export const FIT_LONGHAUL_PCT = 0.20;
+export const FIT_LONGHAUL_MIN_M = 2500;
+export const FIT_LONGHAUL_MIN_CLASS = 3;
+export function fitBonus(ticket, planeClass) {
+  const type = ticket.type || 'cargo';
+  if (type === 'passenger') {
+    const pct = Math.min(FIT_PASSENGER_CAP, FIT_PASSENGER_PER_CLASS * Math.max(0, planeClass - 1));
+    return { pct, kind: pct > 0 ? 'passenger' : null };
+  }
+  if (type === 'rescue' || type === 'photo' || type === 'trial') {
+    return planeClass <= 1 ? { pct: FIT_AGILITY_PCT, kind: 'agility' } : { pct: 0, kind: null };
+  }
+  if (type === 'express') {
+    return (ticket.dist || 0) >= FIT_LONGHAUL_MIN_M && planeClass >= FIT_LONGHAUL_MIN_CLASS
+      ? { pct: FIT_LONGHAUL_PCT, kind: 'longhaul' } : { pct: 0, kind: null };
+  }
+  return { pct: 0, kind: null };
+}
+// The class that fits a ticket best (0 = the matching system has no
+// favourite here): the board's neutral hint when the selected plane
+// is not her. Passengers pay most in the biggest hold that flies;
+// agility work pays in the smallest; a long express pays at class 3+.
+export function fitBestClass(ticket) {
+  const type = ticket.type || 'cargo';
+  if (type === 'passenger') return 4;
+  if (type === 'rescue' || type === 'photo' || type === 'trial') return 1;
+  if (type === 'express') return (ticket.dist || 0) >= FIT_LONGHAUL_MIN_M ? FIT_LONGHAUL_MIN_CLASS : 0;
+  return 0;
+}
+
 // Money: settle a finished flight against a ticket. Pure and testable.
-export function settleFlight(s, ticket, fuelLvl) {
+// The fourth argument is v17's: the payload class of the plane that
+// flew — omit it and the settle is the pre-v17 settle, line for line.
+export function settleFlight(s, ticket, fuelLvl, planeClass) {
   // Fuel burns with time aloft as well as distance: over the same hop, a
   // fast crossing costs less than a slow one.
   const fuelCost = Math.round((s.legDist * 3.0 + s.t * 110) * (1 - (fuelLvl - 1) * 0.22));
@@ -468,6 +516,12 @@ export function settleFlight(s, ticket, fuelLvl) {
   if (Math.abs(s.touchdown.x) <= 3) lines.push({ k: 'centre', amt: CENTRE_BONUS });
   const gb = Math.round(bonusBase * gradeBonusPct(grade));
   if (gb > 0) lines.push({ k: 'gradebonus', amt: gb });
+  // The match bonus (v17): the right airframe for the job, paid on
+  // the ticket's face — the same fitBonus the board quoted.
+  if (typeof planeClass === 'number') {
+    const fit = fitBonus(ticket, planeClass);
+    if (fit.pct > 0) lines.push({ k: 'fit', amt: Math.round(ticket.pay * fit.pct) });
+  }
   // Mission bonuses (v12): each type pays for the thing it asked for.
   const type = ticket.type || 'cargo';
   const comfort = type === 'passenger' ? comfortOf(s) : null;

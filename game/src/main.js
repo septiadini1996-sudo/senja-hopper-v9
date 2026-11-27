@@ -5,12 +5,12 @@
 // schemes mid-flight changes only who is holding the controls — never
 // the flight itself.
 import { createRenderer, M4, sub3, cross3, norm3 } from './engine3d.js';
-import { buildPlane, buildJet, buildJetFanBlur, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, buildDrone, buildTracer, buildFlash, cloudField, createScene } from './scene3d.js';
+import { buildPlane, buildJet, buildFighter, buildJetFanBlur, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, buildDrone, buildTracer, buildFlash, cloudField, createScene } from './scene3d.js';
 import { cockpitState } from './cockpit.js';
-import { createFlight, stepFlight, settleFlight, guidance, objectiveState, RUNWAY_M } from './flight.js';
+import { createFlight, stepFlight, settleFlight, guidance, objectiveState, fitBonus, fitBestClass, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
 import { ISLANDS, HOP_M, ringCourse, islandPositions, islandOutline } from './world.js';
-import { loadSave, storeSave, defaultSave, morningBoard, applyResult, applyType, challengeResult, windForSeason, buyPlane, switchPlane, UPGRADE_COST, CHALLENGES, SAVE_KEY } from './state.js';
+import { loadSave, storeSave, defaultSave, morningBoard, applyResult, applyType, ticketGate, challengeResult, windForSeason, buyPlane, switchPlane, UPGRADE_COST, CHALLENGES, SAVE_KEY } from './state.js';
 import { PLANES, planeById } from './planes.js';
 import { createLook, lookDrag, lookRelease, lookSet, updateLook } from './look.js';
 import { makeT } from './i18n.js';
@@ -20,7 +20,7 @@ import { minimapRoute, minimapPlane } from './minimap.js';
 import { createPreviewState, previewSelect, previewPose } from './preview.js';
 import { makeFrame, keyboardFrame, stickFrame, sliderValue, touchFrame, gyroFrame, gyroButtons, conditionFrame } from './input-core.js';
 import { pilotFrame } from './demo-pilot.js';
-import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, patrolGuide, createPatrol, GUN_RANGE, GUN_DMG, DRONE_HP, ESCORT_POINTS, applyGunDamage, stepLock, resolveLockedShot, leadPoint, escortCountForWave, createEscort, banditFrame, banditFireSolution, banditBurstDamage, ESCORTS, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, STUNT_POINTS, recordStunts, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
+import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, patrolGuide, createPatrol, patrolModsFor, GUN_RANGE, GUN_DMG, DRONE_HP, ESCORT_POINTS, applyGunDamage, stepLock, resolveLockedShot, leadPoint, escortCountForWave, createEscort, banditFrame, banditFireSolution, banditBurstDamage, ESCORTS, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, STUNT_POINTS, recordStunts, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
 import { clamp, mulberry32, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
 
 const $ = s => document.querySelector(s);
@@ -247,7 +247,8 @@ function typeIcon(type) {
 function renderBoard() {
   const s = $('#scr-board'); s.innerHTML = '';
   s.append(chipsRow(), el('h2', 'ptitle', t('board_title')), el('p', 'meta', t('board_hint')));
-  const activeCap = planeById(save.planes.active).capacity;
+  const activePlane = planeById(save.planes.active);
+  const activeCap = activePlane.capacity;
   const activeIcon = planeIconImg(save.planes.active, 'ticketicon');
   for (const [i, tk] of board().entries()) {
     const card = el('div', 'panel card');
@@ -271,18 +272,35 @@ function renderBoard() {
     const objKey = 'objb_' + (tk.type || 'cargo');
     card.append(el('p', 'meta objbox',
       t(objKey, { par: tk.par || 0, need: Math.ceil(tk.rings.length * 0.6) }) + ' · ' + t('weight_line', { n: tk.weight || 1 })));
+    // Plane ↔ mission matching (v17): the ticket states its demands
+    // and its affections BEFORE she commits — a big requirement
+    // badge when the job outgrows a hold or wants storm-worthy
+    // wings, the match line when the selected plane is the right
+    // one for the work, a quiet hint naming the best class when
+    // it is not. The gate itself is state.js' ticketGate; the
+    // money quoted here is flight.js' fitBonus, the same numbers
+    // the settle pays.
+    const gate = ticketGate(tk, activePlane, save);
+    if ((tk.weight || 1) > 1) card.append(el('p', 'reqbadge', t('needs_class', { n: tk.weight })));
+    else if ((tk.type || 'cargo') === 'storm' && !tk.main) card.append(el('p', 'reqbadge', t('needs_storm')));
+    const fit = fitBonus(tk, activeCap);
+    if (fit.pct > 0) {
+      card.append(el('p', 'fitline', t('fit_match', { pct: Math.round(fit.pct * 100) })));
+    } else {
+      const best = fitBestClass(tk);
+      if (best > 0 && best !== activeCap) card.append(el('p', 'fithint', t('fit_hint', { n: best })));
+    }
     const foot = el('div', 'row ticketfoot');
     foot.append(el('span', 'paypill', fmtRp(tk.pay)));
     const destHasStamp = save.stamps.includes(ISLANDS[tk.to].id);
     if (destHasStamp) foot.append(el('span', 'stampchip have', t('stamp_have')));
     else if (tk.main && tk.to === save.islandIdx + 1) foot.append(el('span', 'stampchip next', t('map_next')));
-    const tooHeavy = (tk.weight || 1) > activeCap;
     const fly = btn(t('fly'), 'primary small', 'fly' + i, () => startFlight(tk));
     foot.append(fly);
     card.append(foot);
-    if (tooHeavy) {
+    if (!gate.ok) {
       fly.disabled = true;
-      card.append(el('p', 'meta', t('needs_capacity', { n: tk.weight })));
+      card.append(el('p', 'meta refuse', t('refuse_' + gate.reason, { need: gate.need, have: gate.have })));
     }
     s.append(card);
   }
@@ -429,6 +447,9 @@ function renderHangar() {
     const stats = el('p', 'meta',
       `${t('top_speed')}: ${Math.round(89 * p.speedMul)} KT · ${t('climb_w')}: ${Math.round(p.climbMul * 100)}% · ${t('capacity_w')}: ${p.capacity} · ${p.callsign}`);
     card.append(row, stats);
+    // Her trade (v17): one line saying what this airframe is FOR —
+    // the matching system's other half, read where planes are chosen.
+    card.append(el('p', 'meta roleline', t('role_' + p.id)));
     if (active) { /* she is the one on the line */ }
     else if (owned) {
       card.append(btn(t('switch_plane'), 'small', 'use-plane-' + p.id, () => {
@@ -472,13 +493,21 @@ function renderHangar() {
   }
   s.append(btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }));
 }
+// One dispatch for every airframe's mesh (v17): the flagship from
+// the jet builder, the fighter from hers, the mail planes from the
+// fleet builder — every place that draws a plane (stage, portraits,
+// preview stand) reads through here, so a new airframe shape can
+// never be forgotten by one of them.
+function buildAirframe(Rx, p) {
+  return p.jet ? buildJet(Rx) : p.fighter ? buildFighter(Rx, p) : buildPlane(Rx, p);
+}
+
 // Point the stage at the active airframe: the scene draws ONE plane
 // mesh, so a switch rebuilds it from the new plane's livery and span —
 // or, for the flagship, from the jet builder entirely (v13).
 function setActivePlaneMesh() {
   if (R && assets) {
-    const p = planeById(save.planes.active);
-    assets.plane = p.jet ? buildJet(R) : buildPlane(R, p);
+    assets.plane = buildAirframe(R, planeById(save.planes.active));
   }
 }
 
@@ -498,7 +527,7 @@ function planeIcons() {
     if (!R2) return iconCache;
     R2.setEnv({ ...skyAt(1, 18.25), fog: [0.10, 0.06, 0.09], fogD: 0.0001 });
     for (const p of PLANES) {
-      const built = p.jet ? buildJet(R2) : buildPlane(R2, p);
+      const built = buildAirframe(R2, p);
       const d = p.jet ? 36 : 12.5, hh = p.jet ? 3.2 : 1.5;
       const eye = [-d, hh + 3.6, -d * 0.30];
       R2.begin();
@@ -545,7 +574,7 @@ function pvTick() {
       if (!pvMeshes[pose.planeId]) {
         pvMeshes[pose.planeId] = spec.jet
           ? { ...buildJet(pvR), fan: buildJetFanBlur(pvR) }
-          : buildPlane(pvR, spec);
+          : buildAirframe(pvR, spec);
       }
       const m = pvMeshes[pose.planeId];
       const d = spec.jet ? 36 : 12.5, hh = spec.jet ? 3.2 : 1.5;
@@ -1127,7 +1156,9 @@ function finishFlight(instant = false) {
   ctx.finished = true;
   ctx.wxPin = null; // the receipt backdrop flies under the real clock again
   const f = ctx.flight, ticket = ctx.ticket;
-  const settle = settleFlight(f, ticket, save.upgrades.fuel);
+  // The settle reads the flown plane's class (v17): the match bonus
+  // the board quoted is paid here, by the same fitBonus.
+  const settle = settleFlight(f, ticket, save.upgrades.fuel, planeById(save.planes.active).capacity);
   ctx.settle = settle;
   ctx.challenge = challengeResult(save, f, settle, ticket);
   ctx.stampEarned = !!(settle.delivered && ticket.main && ticket.to === save.islandIdx + 1
@@ -1193,7 +1224,7 @@ function renderReceipt() {
     }
     grow.append(bars); card.append(grow);
   }
-  const keyFor = { ticket: 'r_ticket', rings: 'r_rings', centre: 'r_centre', gradebonus: 'r_gradebonus', fuel: 'r_fuel', fee: 'r_fee', comfort: 'r_comfort', photo: 'r_photo', express: 'r_express', trial: 'r_trial' };
+  const keyFor = { ticket: 'r_ticket', rings: 'r_rings', centre: 'r_centre', gradebonus: 'r_gradebonus', fuel: 'r_fuel', fee: 'r_fee', comfort: 'r_comfort', photo: 'r_photo', express: 'r_express', trial: 'r_trial', fit: 'r_fit' };
   for (const line of settle.lines) {
     const m = el('div', 'money');
     m.append(el('span', '', t(keyFor[line.k]) + (line.n ? ` ×${line.n}` : '')),
@@ -1263,7 +1294,7 @@ function startMode(kind) {
   if (kind === 'campaign') { showBoard(); return; }
   const ticket = modeTicket(kind);
   const mode = { kind, endReason: null, newBest: false, cool: 0 };
-  if (kind === 'patrol') { mode.patrol = createPatrol(); mode.seed = 4242; }
+  if (kind === 'patrol') { mode.patrol = createPatrol(patrolModsFor(save.planes.active)); mode.seed = 4242; }
   if (kind === 'rush') {
     mode.rush = createRush(); mode.rushSeed = 991;
     mode.rushIndex = ticket.rings.length;
@@ -1416,9 +1447,11 @@ function shotDown(m, p) {
   endModeFlight('shotdown');
 }
 
-// One of her bursts lands: sparks at the strike, GUN_DMG off the
-// target's hull, and the kill's bookkeeping when the hull gives out
-// — a drone pays its wave's points, a bandit pays ESCORT_POINTS.
+// One of her bursts lands: sparks at the strike, her guns' damage
+// off the target's hull (the fighter's 18, every other airframe's
+// GUN_DMG — modes.js dealt it into the patrol at creation), and the
+// kill's bookkeeping when the hull gives out — a drone pays its
+// wave's points, a bandit pays ESCORT_POINTS.
 function damageTarget(m, p, tgt) {
   const ctx = flightCtx;
   p.hits += 1;
@@ -1427,7 +1460,7 @@ function damageTarget(m, p, tgt) {
   for (const [ox, oy] of [[0, 0], [0.9, 0.5], [-0.8, 0.9]]) {
     ctx.sparks.push({ x: tgt.x + ox, altM: tgt.altM + oy, dist: tgt.dist, t0: ambient });
   }
-  if (applyGunDamage(tgt, GUN_DMG)) {
+  if (applyGunDamage(tgt, p.gunDmg != null ? p.gunDmg : GUN_DMG)) {
     p.downed += 1;
     if (tgt.kind === 'escort') { p.banditsDown += 1; p.score += ESCORT_POINTS; }
     else p.score += patrolWaveSpec(tgt.wave).points;
@@ -1869,13 +1902,17 @@ function drawGauges(f) {
   const pm2 = flightCtx && flightCtx.mode;
   if (pm2 && pm2.kind === 'patrol') {
     const hp = Math.max(0, pm2.patrol.hp);
+    // The bar reads against HER hull (v17): 100 for the mail planes,
+    // 130 for the fighter — the fraction and its colours are the
+    // same fractions either way.
+    const maxHp = pm2.patrol.maxHp || 100, frac = hp / maxHp;
     g.fillStyle = '#f3d9b0'; g.font = '700 10px system-ui'; g.textAlign = 'left';
     g.fillText(t('hull'), 16, 127);
     g.fillStyle = '#fff3da'; g.font = '800 11px system-ui'; g.textAlign = 'right';
     g.fillText(String(Math.ceil(hp)), 284, 127);
     g.fillStyle = 'rgba(255,220,160,0.18)'; g.fillRect(16, 132, 268, 9);
-    g.fillStyle = hp > 50 ? '#7dd069' : hp > 25 ? '#f2a541' : '#ff4030';
-    g.fillRect(16, 132, 268 * (hp / 100), 9);
+    g.fillStyle = frac > 0.5 ? '#7dd069' : frac > 0.25 ? '#f2a541' : '#ff4030';
+    g.fillRect(16, 132, 268 * frac, 9);
   }
 }
 
@@ -2004,7 +2041,7 @@ let R = null, scene = null, assets = null;
 try { R = createRenderer(canvas); } catch { R = null; }
 if (R) {
   assets = {
-    plane: buildPlane(R, planeById(save.planes.active)),
+    plane: buildAirframe(R, planeById(save.planes.active)),
     isleHome: buildIsland(R, ISLANDS[0], 1),
     isleDest: buildIsland(R, ISLANDS[1], 1),
     islets: [
@@ -2425,6 +2462,14 @@ if (shot === 'flight' || shot === 'receipt') {
   // ledger is posed mid-sortie (one down, 100 on the board) the way
   // the flight frame poses its threaded rings.
   save.settings.lang = 'en'; t = makeT('en'); save.started = true;
+  // &plane= stages a specific airframe in the sight (v17: the
+  // fighter's dossier candidate flies her own patrol).
+  const patrolPlaneP = params.get('plane');
+  if (patrolPlaneP && PLANES.some(p => p.id === patrolPlaneP)) {
+    if (!save.planes.owned.includes(patrolPlaneP)) save.planes.owned.push(patrolPlaneP);
+    save.planes.active = patrolPlaneP;
+    setActivePlaneMesh();
+  }
   startMode('patrol');
   save.clockH = 10.5;
   flightCtx.wxPin = 'clear';
@@ -2617,7 +2662,7 @@ window.__senja = {
   },
   setPatrolHp(v) {
     const m = flightCtx && flightCtx.mode; if (!m || !m.patrol) return false;
-    m.patrol.hp = clamp(v, 0, 100);
+    m.patrol.hp = clamp(v, 0, m.patrol.maxHp || 100);
     return true;
   },
   get modeState() {

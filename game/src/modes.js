@@ -131,11 +131,14 @@ export function patrolShot(drones, f) {
 
 // The patrol ledger: what the receipt reads and the best remembers.
 // v15.2 adds the fight's own state: the player's hull, the escort
-// list, the lock the sight holds, and the bandit bookkeeping.
-export function createPatrol() {
+// list, the lock the sight holds, and the bandit bookkeeping. v17
+// adds the flown airframe's gun damage, dealt by patrolModsFor —
+// every airframe but the fighter flies the standard numbers below.
+export function createPatrol(mods) {
+  const m = mods || { hp: PLAYER_HP, gunDmg: GUN_DMG };
   return {
     wave: 0, drones: [], downed: 0, shots: 0, hits: 0, score: 0, left: MODE_SECONDS, over: false,
-    hp: PLAYER_HP, maxHp: PLAYER_HP, escorts: [], lock: createLock(),
+    hp: m.hp, maxHp: m.hp, gunDmg: m.gunDmg, escorts: [], lock: createLock(),
     banditsDown: 0, banditSeen: false, hurtAge: Infinity, stickHeat: 0,
   };
 }
@@ -154,6 +157,21 @@ export const DRONE_HP = 30;
 export const ESCORT_HP = 90;
 export const ESCORT_POINTS = 300; // a bandit is worth three wave-1 drones
 export const PLAYER_HP = 100;
+
+// The fighter's edge (v17): RAJAWALI was built for this sky. Her
+// twin guns hit for 18 where every other airframe's nose gun hits
+// for 12 (drones fall in two bursts, escorts in five), and her
+// military hull carries 130 where the mail planes carry 100. The
+// waves, the drone hulls and the bandits are UNCHANGED — the edge
+// is hers alone, dealt only when she is the selected airframe; any
+// other id reads the standard patrol, number for number.
+export const FIGHTER_GUN_DMG = 18;
+export const FIGHTER_HP = 130;
+export function patrolModsFor(planeId) {
+  return planeId === 'rajawali'
+    ? { hp: FIGHTER_HP, gunDmg: FIGHTER_GUN_DMG }
+    : { hp: PLAYER_HP, gunDmg: GUN_DMG };
+}
 
 // One hit's bookkeeping: returns true when this hit is the kill.
 export function applyGunDamage(t, dmg) {

@@ -15,6 +15,14 @@ export const PLANES = [
   // The falcon: the fast heavy lifter — speed and a class-2 hold.
   { id: 'alap', callsign: 'PK-ALP', price: 340000, speedMul: 1.24, climbMul: 1.18, accelMul: 1.10, capacity: 2,
     scale: 1.02, span: 1.07, body: [0.25, 0.28, 0.33], accent: [0.95, 0.60, 0.12], cheat: [0.95, 0.60, 0.12] },
+  // The eagle (v17): a single-seat prop fighter — a warbird's silhouette
+  // on a landplane's gear, built for Sky Patrol. Fastest climb in the
+  // hangar and a quick top end, but her hold is a class-1 fighter's:
+  // she hunts the agility work (rescue, photo, trials) and answers no
+  // class-gated freight. In the patrol she carries twin-gun damage and
+  // a fighter's hull (modes.js owns those numbers).
+  { id: 'rajawali', callsign: 'PK-RJW', price: 430000, speedMul: 1.30, climbMul: 1.27, accelMul: 1.14, capacity: 1,
+    fighter: true, scale: 0.97, span: 1.00, body: [0.33, 0.36, 0.25], accent: [0.62, 0.64, 0.58], cheat: [0.78, 0.74, 0.55] },
   // The stork: slow, vast, and the only class-3 hold in the islands.
   { id: 'bangau', callsign: 'PK-BNG', price: 520000, speedMul: 0.94, climbMul: 0.95, accelMul: 0.95, capacity: 3,
     scale: 1.17, span: 1.20, body: [0.88, 0.90, 0.88], accent: [0.10, 0.45, 0.35], cheat: [0.55, 0.20, 0.12] },
