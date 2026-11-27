@@ -86,6 +86,47 @@ function beam(b, p0, p1, w, color) {
   b.quad(E, F, G, H, color); b.quad(A, D, C, B, color);
 }
 
+// A real wheel (v18.1): a polygonal tyre whose axle runs along X, so
+// the ROUND profile reads from behind, from the side and from the
+// front quarter alike. The v18 gear was boxes — and a square "wheel"
+// reads as a tab, not a wheel (the parent's gate caught exactly that:
+// floats and struts, no circles). The tread band and both faces wear
+// the tyre colour; a proud hub disc in light metal rides the outboard
+// face (dir = the sign of that face) with a small dark axle cap at
+// its heart. cy is the axle height: the sole rests at cy − r.
+function wheelX(b, cx, cy, cz, r, w, tyre, hub, dir) {
+  const SEG = 14;
+  const x0 = cx - w / 2, x1 = cx + w / 2;
+  const P = (x, a) => [x, cy + r * Math.sin(a), cz + r * Math.cos(a)];
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    b.quad(P(x0, a0), P(x1, a0), P(x1, a1), P(x0, a1), tyre); // tread band
+    b.tri([x1, cy, cz], P(x1, a1), P(x1, a0), tyre); // +X face
+    b.tri([x0, cy, cz], P(x0, a0), P(x0, a1), tyre); // −X face
+  }
+  const fan = (rr, col, xo) => {
+    const H = (a) => [xo, cy + rr * Math.sin(a), cz + rr * Math.cos(a)];
+    for (let i = 0; i < SEG; i++) {
+      const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+      if (dir > 0) b.tri([xo, cy, cz], H(a1), H(a0), col);
+      else b.tri([xo, cy, cz], H(a0), H(a1), col);
+    }
+  };
+  const xh = (dir > 0 ? x1 : x0) + dir * 0.015;
+  fan(r * 0.55, hub, xh); // the hub disc, proud of the tyre's face
+  fan(r * 0.20, [0.10, 0.09, 0.08], xh + dir * 0.012); // the axle cap
+  // The rim ring: a pale band just inside the tyre's edge on the
+  // outboard face, so the circle's outline survives low light and
+  // dark backgrounds — a dark tyre alone melts into shadow.
+  const xr = (dir > 0 ? x1 : x0) + dir * 0.008, RIM = [0.45, 0.44, 0.42];
+  const RP = (rr, a) => [xr, cy + rr * Math.sin(a), cz + rr * Math.cos(a)];
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    if (dir > 0) b.quad(RP(r * 0.99, a1), RP(r * 0.99, a0), RP(r * 0.80, a0), RP(r * 0.80, a1), RIM);
+    else b.quad(RP(r * 0.99, a0), RP(r * 0.99, a1), RP(r * 0.80, a1), RP(r * 0.80, a0), RIM);
+  }
+}
+
 const GLASS = [0.07, 0.13, 0.18], METAL = [0.58, 0.60, 0.63], RUBBER = [0.16, 0.13, 0.11];
 
 // Reshape a finished builder (v18): scale X by sx and Z about the
@@ -274,27 +315,39 @@ export function buildPlane(R, spec) {
     b.box(sx * (dhx + 0.008), 1.05, 1.35, 0.02, 0.70, 0.54, BELLY); // door panel
     b.box(sx * (dhx + 0.014), 1.05, 1.02, 0.02, 0.05, 0.16, METAL); // door handle
   }
-  // WHEELS (v18): she is an amphibian — each float carries a main
-  // wheel on a short strut at the planing step and a smaller bow
-  // wheel forward, dark tyres with metal hub discs on the outer
-  // faces, every sole resting exactly on the fleet ground line
-  // (float keel −0.62), so she stands on the apron on rubber AND
-  // floats on the water on her hulls, the way the real ones do.
-  const TYRE = [0.13, 0.12, 0.11];
-  for (const sx of [-1.18, 1.18]) {
-    const out = sx + Math.sign(sx) * 0.16;
-    beam(b, [sx, -0.18, -0.05], [out, -0.33, -0.05], 0.09, METAL); // main strut
-    b.box(out, -0.35, -0.05, 0.20, 0.54, 0.54, TYRE); // main wheel, sole at −0.62
-    b.box(out + Math.sign(sx) * 0.085, -0.35, -0.05, 0.05, 0.24, 0.24, METAL); // main hub
-    beam(b, [sx, -0.20, -1.55], [out, -0.42, -1.55], 0.07, METAL); // bow strut
-    b.box(out, -0.44, -1.55, 0.16, 0.36, 0.36, TYRE); // bow wheel, sole at −0.62
-    b.box(out + Math.sign(sx) * 0.065, -0.44, -1.55, 0.04, 0.16, 0.16, METAL); // bow hub
-  }
   // The body's measure (v18): length and beam from the airframe
   // spec, scaled about the prop pivot — the fleet's size ladder is
-  // geometry, not paint. Applied last so every part above, wheels
-  // and windows included, takes the same measure.
+  // geometry, not paint. The wheels are fitted AFTER this (below),
+  // in true fleet measure: reshape stretches Z by the length factor
+  // (up to 1.24 on the Bangau), and a wheel stretched 24% is an
+  // oval, not a wheel.
   reshape(b, spec ? (spec.beam || 1) : 1, spec ? (spec.len || 1) : 1, -3.42);
+  // WHEELS (v18.1): she is an amphibian — each float carries a main
+  // wheel outboard at the planing step and a smaller bow wheel
+  // forward, hung on an axle stub and a diagonal brace off the
+  // float's flank. Real polygonal tyres now (wheelX): Ø0.86 mains,
+  // Ø0.52 bows, hub discs facing out. The v18 boxes failed twice
+  // over — square, and BURIED: their centres sat at ±1.34 against
+  // the float's outer skin at ±1.43, so only a tab of tyre ever
+  // showed. These stand proud of the hull (centres ±1.56/±1.54,
+  // inner faces flush with the skin), every sole exactly on the
+  // fleet ground line −0.62, so she stands on the apron on rubber
+  // AND floats on the water on her hulls, the way the real ones do.
+  // Positions map through the same beam/length measure as the body
+  // (BX/BZ); the wheels' own sizes stay true.
+  const beamS = spec ? (spec.beam || 1) : 1, lenS = spec ? (spec.len || 1) : 1;
+  const BX = (x) => x * beamS, BZ = (z) => -3.42 + (z + 3.42) * lenS;
+  const TYRE = [0.09, 0.085, 0.08], HUB = [0.84, 0.85, 0.87];
+  for (const sx of [-1, 1]) {
+    const mx = BX(sx * 1.56), mz = BZ(-0.05); // main axle, at the step
+    beam(b, [BX(sx * 1.38), -0.20, mz], [mx, -0.20, mz], 0.12, METAL); // axle stub
+    beam(b, [BX(sx * 1.42), -0.30, BZ(0.30)], [mx, -0.20, mz], 0.09, METAL); // diagonal brace
+    wheelX(b, mx, -0.20, mz, 0.43, 0.28, TYRE, HUB, sx); // main wheel, sole at −0.62
+    const wx = BX(sx * 1.54), wz = BZ(-1.55); // bow axle, on the float's nose
+    beam(b, [BX(sx * 1.38), -0.36, wz], [wx, -0.36, wz], 0.10, METAL); // axle stub
+    beam(b, [BX(sx * 1.42), -0.30, BZ(-1.20)], [wx, -0.36, wz], 0.08, METAL); // diagonal brace
+    wheelX(b, wx, -0.36, wz, 0.26, 0.22, TYRE, HUB, sx); // bow wheel, sole at −0.62
+  }
   const plane = R.makeMesh(b);
   // Propeller: tapered blades (a wide root pair and a narrower tip pair
   // on each axis), a metal backplate and a proper spinner cone, all spun
@@ -385,19 +438,20 @@ export function buildFighter(R, spec) {
   b.box(5.60 * SPAN, 0.78, -0.60, 0.26, 0.12, 0.26, [0.20, 1.50, 0.35]);
   b.box(0, 3.14, 3.48, 0.18, 0.11, 0.18, [1.5, 1.5, 1.4]);
   b.box(0, 0.50, -3.30, 0.30, 0.12, 0.14, [1.9, 1.8, 1.5]);
-  // Fixed gear (v18): bigger mains with hub caps and spats, and
-  // the tail wheel finally STANDING on the ground line — the v17
-  // wheel hovered (its box bottom sat at +0.10, three-quarters of
-  // a metre over the strip); a longer leg and a taller wheel put
-  // its sole at −0.62 with the mains, a proper taildragger stance.
+  // Fixed gear (v18, readability v18.1): bigger mains with spats,
+  // and the tail wheel STANDING on the ground line — the v17 wheel
+  // hovered (its box bottom sat at +0.10, three-quarters of a metre
+  // over the strip); a longer leg and a taller wheel put its sole
+  // at −0.62 with the mains, a proper taildragger stance. The
+  // wheels themselves are polygonal now (wheelX, Ø0.68 mains with
+  // pale hub discs): the v18 boxes read as blocks, not wheels.
   for (const sx of [-1, 1]) {
     beam(b, [sx * 0.52, 0.58, -0.72], [sx * 1.04, -0.28, -0.80], 0.13, BODY);
-    b.box(sx * 1.04, -0.34, -0.80, 0.24, 0.56, 0.58, RUBBER); // main wheel, sole at −0.62
-    b.box(sx * 1.04 + sx * 0.10, -0.34, -0.80, 0.06, 0.26, 0.26, METAL); // hub cap
+    wheelX(b, sx * 1.04, -0.28, -0.80, 0.34, 0.26, [0.10, 0.095, 0.09], [0.84, 0.85, 0.87], sx); // main wheel, sole at −0.62
     b.box(sx * 0.98, -0.02, -0.80, 0.10, 0.34, 0.46, BODY); // spat over the leg's foot
   }
-  beam(b, [0, 1.02, 3.30], [0, -0.36, 3.44], 0.07, METAL); // tail-wheel leg, reaching down
-  b.box(0, -0.50, 3.44, 0.13, 0.24, 0.26, RUBBER); // tail wheel, sole at −0.62
+  beam(b, [0, 1.02, 3.30], [0, -0.44, 3.44], 0.07, METAL); // tail-wheel leg, reaching down
+  wheelX(b, 0, -0.48, 3.44, 0.14, 0.11, [0.10, 0.095, 0.09], [0.84, 0.85, 0.87], 1); // tail wheel, sole at −0.62
   // Aerial mast and wire, pitot's mirror: the small truths.
   b.box(0, 1.86, 1.55, 0.05, 0.26, 0.05, METAL);
   beam(b, [0, 1.98, 1.55], [0, 3.02, 3.40], 0.016, [0.10, 0.10, 0.11]);
@@ -1518,20 +1572,34 @@ export function buildJet(R) {
     b.box(sx * 0.19, cy + 5.30, 10.95, 0.03, 1.30, 2.6, [0.78, 0.14, 0.16]); // red
     b.box(sx * 0.19, cy + 3.95, 11.95, 0.03, 1.15, 1.7, [0.08, 0.08, 0.09]); // black
   }
-  // Gear (v18): a real tricycle where the early builds suggested
-  // bogies with plain boxes — a nose strut carrying twin wheels,
-  // and two main bogies, each a beam on two axles of twin wheels.
-  // Every sole rests on the fleet ground line −0.62.
-  const JTYRE = [0.13, 0.12, 0.11];
+  // Gear (v18, readability v18.1): a real tricycle — a nose strut
+  // carrying twin wheels, and two main bogies, each a beam on two
+  // axles of twin wheels. The wheels are polygonal now (wheelX) and
+  // deliberately OVERSCALE — Ø0.60 nose, Ø0.68 bogies, darker
+  // tyres, pale hub discs facing away from the centreline: at true
+  // scale (Ø0.50 on a 26-unit hull) the first v18.1 captures proved
+  // them invisible at preview distance, specks under the belly.
+  // Every sole rests on −0.62.
+  const JTYRE = [0.08, 0.075, 0.07], JHUB = [0.80, 0.81, 0.83];
   beam(b, [0, 0.48, -8.6], [0, -0.30, -8.6], 0.16, METAL); // nose strut
-  b.box(-0.14, -0.44, -8.6, 0.16, 0.36, 0.36, JTYRE); // nose wheel, port
-  b.box(0.14, -0.44, -8.6, 0.16, 0.36, 0.36, JTYRE); // nose wheel, starboard
-  for (const sx of [-1.15, 1.15]) {
-    beam(b, [sx, 0.48, 1.4], [sx, -0.18, 1.4], 0.20, METAL); // main strut
-    b.box(sx, -0.20, 1.4, 0.14, 0.10, 1.70, METAL); // bogie beam
-    for (const az of [0.85, 1.95]) {
-      b.box(sx - 0.15, -0.43, az, 0.15, 0.38, 0.38, JTYRE); // twin wheel, inboard
-      b.box(sx + 0.15, -0.43, az, 0.15, 0.38, 0.38, JTYRE); // twin wheel, outboard
+  wheelX(b, -0.16, -0.32, -8.6, 0.30, 0.18, JTYRE, JHUB, -1); // nose wheel, port
+  wheelX(b, 0.16, -0.32, -8.6, 0.30, 0.18, JTYRE, JHUB, 1); // nose wheel, starboard
+  // The bogies ride in SPONSONS on the forward fuselage (C-5
+  // style): a fairing blister on each flank ahead of the wing, a
+  // strut, a beam, two axles of twins. The placement is a camera
+  // verdict, not a whim — at the v18 centreline spot (±1.15, under
+  // the wing box) the geometry verified present (1,456 rim verts)
+  // but EVERY angle the game owns hid the wheels behind the
+  // inboard engines and the wing; gear nobody can see is the
+  // box-wheel failure all over again. Here they stand in the open,
+  // ahead of the wing, in profile, preview and front view alike.
+  for (const sx of [-2.35, 2.35]) {
+    b.box(sx * 0.93, 0.62, -3.2, 0.75, 0.62, 2.9, WHITE); // sponson fairing (x centre = sx·2.35·0.93 ≈ ±2.18)
+    beam(b, [sx, 0.45, -3.2], [sx, -0.05, -3.2], 0.20, METAL); // main strut
+    b.box(sx, 0.02, -3.2, 0.14, 0.10, 1.95, METAL); // bogie beam
+    for (const az of [-3.75, -2.65]) {
+      wheelX(b, sx - 0.15, -0.28, az, 0.34, 0.20, JTYRE, JHUB, Math.sign(sx - 0.15)); // twin wheel, inboard
+      wheelX(b, sx + 0.15, -0.28, az, 0.34, 0.20, JTYRE, JHUB, Math.sign(sx + 0.15)); // twin wheel, outboard
     }
   }
   // Detailing (v14): a wing-root fairing, a nose-gear door, the APU
