@@ -411,6 +411,24 @@ export function freeLeg(at, islandCount) {
   return { from: at, to: at - 1 };
 }
 
+// ---------- FREE FLIGHT: stunt scoring (v15.3) ----------
+// The DIRECT handling's aerobatics (flight.js detects the completed
+// turns) are Free Flight's second harvest: a loop is worth more
+// than a barrel roll — it costs more height and more nerve — and
+// the sortie's stunt score banks a best in the mode ledger. The
+// motion itself is available in every mode under DIRECT; only
+// Free Flight scores it.
+export const STUNT_POINTS = { loop: 250, roll: 150 };
+export function stuntScoreOf(loops, rolls) {
+  return (loops || 0) * STUNT_POINTS.loop + (rolls || 0) * STUNT_POINTS.roll;
+}
+export function recordStunts(modes, loops, rolls) {
+  const score = stuntScoreOf(loops, rolls);
+  const best = score > (modes.stuntBest || 0);
+  if (best) modes.stuntBest = score;
+  return { score, best };
+}
+
 // ---------- AIR RACE ----------
 // Lombok → Sumbawa: a mid-chain hop with room to run. Two rivals fly
 // it against her, driven by the game's own demo pilot (main.js wires
@@ -468,7 +486,7 @@ export function raceFinishTime(rivalFlight, nowT) {
 // the title's mode cards read the bests back. Pure over the modes
 // object so the migration and the bookkeeping test without a browser.
 export function defaultModes() {
-  return { patrolBest: 0, patrolDowned: 0, rushBest: 0, rushStreak: 0, raceBest: null, raceWins: 0, freeVisits: [] };
+  return { patrolBest: 0, patrolDowned: 0, rushBest: 0, rushStreak: 0, raceBest: null, raceWins: 0, freeVisits: [], stuntBest: 0 };
 }
 export function recordPatrol(modes, score, downed) {
   const best = score > (modes.patrolBest || 0);

@@ -20,7 +20,7 @@ import { minimapRoute, minimapPlane } from './minimap.js';
 import { createPreviewState, previewSelect, previewPose } from './preview.js';
 import { makeFrame, keyboardFrame, stickFrame, sliderValue, touchFrame, gyroFrame, gyroButtons, conditionFrame } from './input-core.js';
 import { pilotFrame } from './demo-pilot.js';
-import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, patrolGuide, createPatrol, GUN_RANGE, GUN_DMG, DRONE_HP, ESCORT_POINTS, applyGunDamage, stepLock, resolveLockedShot, leadPoint, escortCountForWave, createEscort, banditFrame, banditFireSolution, banditBurstDamage, ESCORTS, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
+import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, patrolGuide, createPatrol, GUN_RANGE, GUN_DMG, DRONE_HP, ESCORT_POINTS, applyGunDamage, stepLock, resolveLockedShot, leadPoint, escortCountForWave, createEscort, banditFrame, banditFireSolution, banditBurstDamage, ESCORTS, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, STUNT_POINTS, recordStunts, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
 import { clamp, mulberry32, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
 
 const $ = s => document.querySelector(s);
@@ -121,7 +121,7 @@ function el(tag, cls, text) {
 function btn(label, cls, act, onClick) {
   const b = el('button', 'btn' + (cls ? ' ' + cls : ''), label);
   if (act) b.dataset.act = act;
-  b.addEventListener('click', ev => { ev.preventDefault(); audio.ensure(); audio.blip('click'); onClick(); });
+  b.addEventListener('click', ev => { ev.preventDefault(); audio.ensure(); audio.primeRadio(); audio.blip('click'); onClick(); });
   return b;
 }
 function show(name) {
@@ -134,6 +134,14 @@ function show(name) {
 function toast(msg) {
   const e = $('#toast'); e.textContent = msg; e.style.display = 'block';
   clearTimeout(toast._h); toast._h = setTimeout(() => { e.style.display = 'none'; }, 2400);
+}
+// The stunt callout (v15.3): the banner names the stunt and its
+// points the moment flight.js banks it, then clears itself.
+function showStunt(kind, points) {
+  const e = $('#stunt'); if (!e) return;
+  e.textContent = t(kind === 'loop' ? 'stunt_loop' : 'stunt_roll', { n: points });
+  e.style.display = 'block';
+  clearTimeout(showStunt._h); showStunt._h = setTimeout(() => { e.style.display = 'none'; }, 2300);
 }
 
 // ---------- screens ----------
@@ -155,7 +163,7 @@ function renderTitle() {
   const s = $('#scr-title'); s.innerHTML = '';
   s.append(chipsRow());
   s.append(el('h1', 'logo', t('game_title')), el('p', 'sub', t('game_sub')));
-  const col = el('div'); col.style.cssText = 'display:flex;flex-direction:column;align-items:center;';
+  const col = el('div', 'menucol');
   if (save.started) col.append(btn(t('continue'), 'primary', 'continue', () => showBoard()));
   col.append(btn(t('new_game'), save.started ? '' : 'primary', 'newgame', () => {
     const keep = { settings: save.settings };
@@ -193,7 +201,7 @@ function modeSection() {
     { kind: 'campaign', name: t('mode_campaign'), desc: t('mode_campaign_desc'), best: `✦ ${save.stamps.length}/${ISLANDS.length - 1}`, act: () => showBoard() },
     { kind: 'patrol', name: t('mode_patrol'), desc: t('mode_patrol_desc'), best: save.modes.patrolBest ? t('best_score', { n: save.modes.patrolBest }) : '' },
     { kind: 'rush', name: t('mode_rush'), desc: t('mode_rush_desc'), best: save.modes.rushBest ? t('best_score', { n: save.modes.rushBest }) : '' },
-    { kind: 'free', name: t('mode_free'), desc: t('mode_free_desc'), best: save.modes.freeVisits.length ? t('free_visited', { n: save.modes.freeVisits.length }) : '' },
+    { kind: 'free', name: t('mode_free'), desc: t('mode_free_desc'), best: [save.modes.freeVisits.length ? t('free_visited', { n: save.modes.freeVisits.length }) : '', save.modes.stuntBest ? t('best_stunt', { n: save.modes.stuntBest }) : ''].filter(Boolean).join(' · ') },
     { kind: 'race', name: t('mode_race'), desc: t('mode_race_desc'), best: save.modes.raceBest ? t('race_best_line', { n: t('race_pos_' + save.modes.raceBest) }) : t('race_none') },
   ];
   for (const c of cards) {
@@ -297,7 +305,7 @@ function closeMap() {
 function renderMap() {
   const s = $('#scr-map'); s.innerHTML = '';
   s.append(chipsRow(), el('h2', 'ptitle', t('map_title')));
-  const card = el('div', 'panel card'); card.style.width = 'min(700px, 94vw)';
+  const card = el('div', 'panel card'); // width from the shared column rules (#scr-map .card)
   const cv = document.createElement('canvas'); cv.id = 'mapcv';
   cv.width = 680; cv.height = 400; cv.style.width = '100%'; cv.style.display = 'block';
   card.append(cv); s.append(card);
@@ -600,6 +608,15 @@ function renderSettings() {
   card.append(row(t('music'), segControl(() => save.settings.music, v => { save.settings.music = v; storeSave(store, save); audio.applyLevels(); renderSettings(); })));
   card.append(row(t('sfx'), segControl(() => save.settings.sfx, v => { save.settings.sfx = v; storeSave(store, save); audio.applyLevels(); renderSettings(); })));
   card.append(row(t('radio_w'), segControl(() => save.settings.radio ?? 4, v => { save.settings.radio = v; storeSave(store, save); audio.applyLevels(); renderSettings(); })));
+  // TEST RADIO (v15.3): one line through the repaired radio path —
+  // the tap primes the channel, the line speaks by whichever mouth
+  // the session's health check chose, and the toast names it.
+  const testBtn = btn(t('test_radio'), 'small', 'test-radio', () => {
+    audio.testRadio(t('radio_test_line'));
+    const route = audio.radioState().lastRoute;
+    toast(t(route === 'tts' ? 'radio_test_tts' : 'radio_test_formant'));
+  });
+  card.append(row('', testBtn));
   const master = el('div', 'segrow');
   for (const on of [true, false]) {
     const b = btn(on ? t('on') : t('off'), 'small' + (save.settings.master === on ? ' on' : ''), '', () => {
@@ -770,6 +787,10 @@ function buildHud() {
     ribbon.append(tick);
   }
   const guide = el('div'); guide.id = 'guide';
+  // The stunt callout (v15.3): a gold banner under the timer that
+  // names a completed loop or barrel roll and its points, in Free
+  // Flight where stunts are scored. Hidden until showStunt fires.
+  const stunt = el('div'); stunt.id = 'stunt'; stunt.style.display = 'none';
   const radioStrip = el('div'); radioStrip.id = 'radio'; radioStrip.style.display = 'none';
   const lookChip = el('div'); lookChip.id = 'lookchip'; lookChip.style.display = 'none';
   const warn = el('div'); warn.id = 'warn';
@@ -782,7 +803,7 @@ function buildHud() {
   minimap.width = 148; minimap.height = 104;
   const veil = el('div'); veil.id = 'cloudveil';
   const rain = document.createElement('canvas'); rain.id = 'rain';
-  hud.append(top, gauges, ribbon, guide, radioStrip, lookChip, warn, radar, minimap, veil, rain);
+  hud.append(top, gauges, ribbon, guide, stunt, radioStrip, lookChip, warn, radar, minimap, veil, rain);
   ui.append(hud);
   // Touch pad (TOUCH scheme)
   const pad = el('div', 'fctl'); pad.id = 'pad';
@@ -1052,6 +1073,14 @@ function startFlight(ticket) {
     speedMul: plane.speedMul, climbMul: plane.climbMul, accelMul: plane.accelMul || 1,
     respMul: 1 + ((save.upgrades.handling || 1) - 1) * 0.18,
     assist: (save.handling || 'assisted') === 'assisted',
+    // Aerobatics ride the DIRECT handling only (v15.3): the player's
+    // own flights get the true-attitude path when she has chosen the
+    // raw stick; ASSISTED flights are created exactly as before. The
+    // strip-touchdown completion is the player's own rule too — the
+    // race rivals and bandits build their flights elsewhere and
+    // never carry either flag.
+    aero: (save.handling || 'assisted') === 'direct',
+    stripFinish: true,
     pickup: ticket.pickup || null, gate: ticket.gate || null,
   });
   // The forecast IS the weather flown (v15 gate fix): the ticket's
@@ -1229,7 +1258,7 @@ function startMode(kind) {
     mode.rushSeen = { hit: 0, miss: 0 };
   }
   if (kind === 'race') mode.race = { rivals: RIVALS.map(def => ({ def, flight: null, mesh: null, frame: 0, speedBase: 1 })), position: null };
-  if (kind === 'free') mode.freeFrom = ticket.from;
+  if (kind === 'free') { mode.freeFrom = ticket.from; mode.stunt = { loops: 0, rolls: 0, score: 0 }; }
   startFlight(ticket);
   flightCtx.mode = mode;
   flightCtx.booms = [];
@@ -1510,6 +1539,14 @@ function finishModeFlight() {
     m.race.position = racePosition(f, m.race.rivals.map(r => r.flight));
     m.newBest = recordRace(save.modes, m.race.position);
   } else if (m.kind === 'free') {
+    // Stunts bank whatever the ending (v15.3): a loop flown on a leg
+    // that ends in the sea was still flown. The score joins the
+    // mode ledger beside the visit stamps.
+    if (m.stunt) {
+      const sb = recordStunts(save.modes, m.stunt.loops, m.stunt.rolls);
+      m.stuntScore = sb.score;
+      if (sb.best) m.newBest = true;
+    }
     if (f.outcome === 'landed') {
       m.freeVisitNew = recordFreeVisit(save.modes, ISLANDS[ctx.ticket.to].id);
       if (m.freeVisitNew) audio.blip('stamp');
@@ -1562,6 +1599,11 @@ function renderModeReceipt() {
   } else { // free
     title = f.outcome === 'splash' ? t('rc_free_splash') : t('rc_free_title');
     card.append(el('p', 'meta', t('rc_free_body')));
+    if (m.stunt && (m.stunt.loops > 0 || m.stunt.rolls > 0)) {
+      if (m.stunt.loops > 0) card.append(row(t('rc_free_loops'), String(m.stunt.loops)));
+      if (m.stunt.rolls > 0) card.append(row(t('rc_free_rolls'), String(m.stunt.rolls)));
+      card.append(row(t('rc_free_stunts'), String(m.stuntScore || m.stunt.score)));
+    }
     card.append(el('p', 'meta', m.freeVisitNew
       ? t('rc_free_visit', { island: ISLANDS[tk.to].name }) : t('rc_free_novisit')));
   }
@@ -1680,7 +1722,8 @@ function updateHud() {
       const pos = racePosition(f, m.race.rivals.map(r => r.flight));
       if (objEl2) objEl2.innerHTML = t('guide_race', { pos, g: f.ringsHit, n: f.rings.length });
     } else if (m.kind === 'free') {
-      if (objEl2) objEl2.innerHTML = t('hud_free', { island: ISLANDS[tk.to].name });
+      if (objEl2) objEl2.innerHTML = t('hud_free', { island: ISLANDS[tk.to].name })
+        + (m.stunt && m.stunt.score > 0 ? ` · ${t('hud_stunts', { s: m.stunt.score })}` : '');
       guide.textContent = t('guide_free');
     }
   }
@@ -1906,7 +1949,7 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
-document.addEventListener('pointerdown', () => { audio.ensure(); }, { once: true });
+document.addEventListener('pointerdown', () => { audio.ensure(); audio.primeRadio(); }, { once: true });
 
 // Free-look drag (v12): a drag that starts on the bare stage — not on a
 // button, the stick, the throttle slider or any flight control — turns
@@ -1991,6 +2034,11 @@ function stageState() {
   if (flightCtx) {
     const f = flightCtx.flight;
     return { dist: f.dist, x: f.x, alt: f.alt, speed: f.speed, vs: f.vs, bank: f.bank, pitchVis: f.pitchVis,
+      // The aerobatic attitude (v15.3): present only on a DIRECT
+      // flight — the scene rotates the mesh by these directly, so a
+      // loop reads as a loop. Standard flights leave both null and
+      // the mesh keeps its pitchVis/bank dress.
+      attPitch: f.aero ? f.attPitch : null, attRoll: f.aero ? f.attRoll : null,
       rings: f.rings, legDist: f.legDist, time: IS_SHOT ? 3.7 : ambient, propSpin, fx: flightCtx.fx, camMode, env: envNow,
       surface: f.surface, discA: 0.08 + 0.24 * frame.throttle,
       boom: flightCtx.boom ? { x: flightCtx.boom.x, dist: flightCtx.boom.dist, age: ambient - flightCtx.boom.t0 } : null,
@@ -2067,6 +2115,22 @@ function stepOnce(dt) {
   f.wind = windForSeason(save.settings.season) * envNow.windMul;
   const before = f.ringsHit;
   stepFlight(f, frame, dt);
+  // Stunt completions (v15.3): flight.js banks a loop or barrel roll
+  // into the queue the moment the turn closes. Free Flight scores
+  // them — the callout fires and the sortie ledger grows; anywhere
+  // else the motion was simply available and the queue just drains.
+  if (f.stuntEvents && f.stuntEvents.length) {
+    const evs = f.stuntEvents.splice(0);
+    if (ctx.mode && ctx.mode.kind === 'free' && ctx.mode.stunt) {
+      for (const ev of evs) {
+        const pts = STUNT_POINTS[ev.kind] || 0;
+        if (ev.kind === 'loop') ctx.mode.stunt.loops += 1; else ctx.mode.stunt.rolls += 1;
+        ctx.mode.stunt.score += pts;
+        showStunt(ev.kind, pts);
+        audio.blip('ring');
+      }
+    }
+  }
   pollRadio(); // the tower speaks at flight phases, judged after each step
   if (ctx.mode) stepMode(dt); // the modes keep their own clocks and ledgers
   propSpin += dt * (3 + frame.throttle * 34);
@@ -2437,6 +2501,12 @@ window.__senja = {
   // the one currently on the strip.
   get radioLog() { return [...radioLog]; },
   get radioNow() { return radioNowKey; },
+  // The radio's health (v15.3): the engine on offer, the session's
+  // TTS verdict, and which mouth spoke last — plus the settings
+  // test path and a forced-unhealthy switch for the test rig.
+  get radioState() { return audio.radioState(); },
+  testRadio() { return audio.testRadio(t('radio_test_line')); },
+  radioForceBad() { audio.forceTtsHealth('bad'); },
   // The route box's data (v14): the current leg's route + plane mark.
   get minimap() { return flightCtx ? { route: mmRoute, plane: flightCtx.flight ? minimapPlane(mmRoute, flightCtx.flight) : null } : null; },
   openMap,
@@ -2521,7 +2591,9 @@ window.__senja = {
     }
     if (m.rush) out.rush = { score: m.rush.score, combo: m.rush.combo, threaded: m.rush.threaded, bestStreak: m.rush.bestStreak, left: m.rush.left };
     if (m.race) out.race = { position: m.race.position || racePosition(flightCtx.flight, m.race.rivals.map(r => r.flight)), rivals: m.race.rivals.map(r => ({ dist: r.flight ? r.flight.dist : 0, done: r.flight ? r.flight.done : false, outcome: r.flight ? r.flight.outcome : null })) };
-    if (m.kind === 'free') out.free = { at: freeAt >= 0 ? freeAt : save.islandIdx, visitNew: !!m.freeVisitNew };
+    if (m.kind === 'free') out.free = { at: freeAt >= 0 ? freeAt : save.islandIdx, visitNew: !!m.freeVisitNew,
+      stunts: m.stunt ? { loops: m.stunt.loops, rolls: m.stunt.rolls, score: m.stunt.score } : null,
+      stuntBest: save.modes.stuntBest || 0 };
     return out;
   },
   forceModeEnd() {

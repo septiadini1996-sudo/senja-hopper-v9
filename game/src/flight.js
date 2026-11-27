@@ -35,6 +35,21 @@ export const RUNWAY_ACCEL = 0.55;
 export const LIFT_REF = 21; // m/s: lift balances weight at neutral pitch
 export const SINK_MAX = 5.4; // m/s of sink at zero lift (deep stall)
 export const CRASH_SINK = -6.0; // m/s: water contact harder than this ends the flight
+// Landing completion (v15.3): the delivery is done when she is DOWN
+// on the destination strip and slowed — not when she reaches the
+// strip's far end. The strip the scene draws (STRIP_LAYOUT in
+// scene3d.js: a 200 m deck centred 89 m past the leg's end) puts its
+// near threshold DEST_STRIP_M before legDist; a touchdown inside
+// that zone, followed by slowing to TAXI_SPEED on the surface,
+// completes the flight with the touchdown's own grading.
+export const DEST_STRIP_M = 189; // = STRIP_LAYOUT.centreZ + STRIP_LAYOUT.length / 2
+export const TAXI_SPEED = 8; // m/s: taxi pace — at or below it, the arrival is over
+// Aerobatics (v15.3): the DIRECT handling's true attitude. The stick
+// rotates the airframe at these rates; a loop flown at cruise takes
+// ~4.2 s of held pitch, a barrel roll ~2.7 s of held roll.
+export const AERO_PITCH_RATE = 1.5; // rad/s at full stick, full airflow
+export const AERO_ROLL_RATE = 2.3; // rad/s at full stick
+export const AERO_BLEED = 9.0; // m/s^2 of speed traded for height along the nose line
 // The explosion (v13): a crash is not always a fireball. She burns only
 // when the impact carries real energy — a deep-stall arrival, or any
 // crash-sink arrival after a fall FROM HEIGHT (the power-loss plunge the
@@ -70,6 +85,23 @@ export function createFlight(opts) {
     pickup: opts.pickup ? { ...opts.pickup } : null, pickedUp: false,
     gate: opts.gate ? { ...opts.gate, passed: false, missed: false } : null,
     photoTaken: false, rough: 0, stalled: false, exploded: false,
+    // Aerobatics (v15.3): a true-attitude path flown ONLY when the
+    // caller opts in (main.js passes it for the player's DIRECT
+    // handling; the demo pilot, race rivals and patrol bandits never
+    // carry it and stay on the standard path). attPitch/attRoll are
+    // the airframe's real rotation in radians, free to accumulate
+    // past a full turn; stuntPitch/stuntRoll are the signed airborne
+    // accumulators stunt detection reads, and loops/barrelRolls the
+    // banked counts, with stuntEvents the completion queue the shell
+    // drains for callouts.
+    aero: !!opts.aero, attPitch: 0, attRoll: 0,
+    stuntPitch: 0, stuntRoll: 0, loops: 0, barrelRolls: 0, stuntEvents: [],
+    // Strip completion (v15.3): opted in by the shell for the
+    // player's own flights. stripTouch records a touchdown inside
+    // the destination strip zone (its grading captured at contact);
+    // slowing to taxi speed on the strip with one recorded finishes
+    // the flight there instead of at the strip's far end.
+    stripFinish: !!opts.stripFinish, stripTouch: null,
   };
 }
 
@@ -92,7 +124,13 @@ export function stepFlight(s, input, dt) {
   const flow = clamp((s.speed - STALL) / (MAX_SPEED * 0.55 * s.speedMul), 0, 1);
   const maxClimb = (7.4 + (s.engineLvl - 1) * 0.7) * flow * s.climbMul;
   const maxSink = -7.6;
-  let wantVs = input.pitch >= 0 ? input.pitch * maxClimb : input.pitch * -maxSink * Math.max(flow, 0.35);
+  let wantVs;
+  if (s.aero) {
+    // The aerobatic path (v15.3, DIRECT only): attitude first, then
+    // the vertical speed the attitude and the wing together produce.
+    wantVs = aeroStep(s, input, dt, onGround, flow);
+  } else {
+  let stdVs = input.pitch >= 0 ? input.pitch * maxClimb : input.pitch * -maxSink * Math.max(flow, 0.35);
   // Lift and the stall (v12): the pitch demand is only half the story —
   // the wing holds her up in proportion to the square of her airspeed,
   // and whatever lift is missing arrives as sink. ASSISTED handling
@@ -101,7 +139,7 @@ export function stepFlight(s, input, dt) {
   // pulling back mostly stops working until speed is bought back.
   const lift = clamp((s.speed / LIFT_REF) ** 2, 0, 1);
   s.stalled = !onGround && s.speed < STALL;
-  if (s.stalled && wantVs > 0) wantVs *= 0.3;
+  if (s.stalled && stdVs > 0) stdVs *= 0.3;
   // The assist fade: ASSISTED's 0.72 damping is a hands-off kindness, not
   // a veto over the pilot. Hold the stick at the nose-down stop and the
   // damping yields over about a second until the sink runs at the full
@@ -113,7 +151,9 @@ export function stepFlight(s, input, dt) {
     else s.assistFade = Math.max(0, (s.assistFade || 0) - dt / 0.6);
   }
   const assistDamp = s.assist ? lerp(0.72, 1, s.assistFade || 0) : 1;
-  if (!onGround) wantVs += -SINK_MAX * (1 - lift) * assistDamp;
+  if (!onGround) stdVs += -SINK_MAX * (1 - lift) * assistDamp;
+  wantVs = stdVs;
+  }
   const prevAlt = s.alt;
   // Vertical speed settles faster than it spools up: releasing the stick must
   // stop a climb promptly (a long float upward after release reads as the
@@ -121,6 +161,7 @@ export function stepFlight(s, input, dt) {
   // keeps enough lag to feel like weight rather than a switch.
   const vsRate = (Math.abs(wantVs) < Math.abs(s.vs) ? 6.0 : 4.2) * s.respMul;
   s.vs = lerp(s.vs, wantVs, clamp(dt * vsRate, 0, 1));
+  const vsIn = s.vs; // the sink she carries INTO this step's stride (strip-touch grading reads it)
   // A hard arrival on the water, well short of the strip, ends the flight
   // where it happens: she does not bounce off a stall and taxi on. A
   // gentle touch (a proper flare's sink rate or softer) still settles
@@ -142,6 +183,27 @@ export function stepFlight(s, input, dt) {
   if (s.alt <= 0.01 && s.speed < LIFTOFF) s.vs = Math.min(s.vs, 0); // floats hold her down
   if (s.alt <= 0.01 && s.vs < 0) s.vs = 0;
   s.alt = Math.max(0, s.alt + s.vs * dt);
+  // The strip touchdown (v15.3): the stride that brings her from the
+  // air to the surface INSIDE the destination strip zone is recorded
+  // with its own grading — the arrival she actually made, not the
+  // near-zero sink of a later taxi stop. A genuinely rough arrival
+  // in the zone ends the flight here, exactly as the same arrival
+  // reads at the leg's end today. A touch-and-go clears the record:
+  // only the touchdown she STAYS down from can complete the leg.
+  if (s.stripFinish && s.airborne && prevAlt > 0.01 && s.alt <= 0.01) {
+    if (s.dist >= s.legDist - DEST_STRIP_M && Math.abs(s.x) <= STRIP_HALF) {
+      const roughLimit = -(10 + (s.hullLvl - 1) * 1.6);
+      if (vsIn < roughLimit) {
+        s.done = true;
+        s.outcome = 'splash';
+        s.touchdown = { vs: vsIn, x: s.x, soft: 0, centre: centreScore(s.x), approach: approachScore(s) };
+        s.exploded = crashExplodes(s);
+        return s;
+      }
+      s.stripTouch = { vs: vsIn, x: s.x, soft: softScore(vsIn), centre: centreScore(s.x), approach: approachScore(s) };
+    }
+  }
+  if (s.alt > 0.05) s.stripTouch = null; // airborne again: the record was a touch-and-go
   if (s.alt > 0.05 && !s.airborne) {
     s.airborne = true;
     s.tookOffFrom = s.dist <= s.runwayM ? 'runway' : 'water';
@@ -154,13 +216,20 @@ export function stepFlight(s, input, dt) {
   // porpoising rotation grazes the band without leaving the deck.
   s.surface = s.alt > 0.05 ? 'air' : (s.dist < s.runwayM ? 'runway' : 'water');
 
-  // Lateral: banked turn drifts the plane across the route.
-  const latRate = input.roll * 13 * s.respMul * clamp(s.speed / 22, 0, 1);
+  // Lateral: banked turn drifts the plane across the route. On the
+  // aerobatic path the bank IS the roll attitude's sine — a barrel
+  // roll drifts her one way, then the other, and settles level.
+  const latRate = (s.aero ? Math.sin(s.attRoll) : input.roll) * 13 * s.respMul * clamp(s.speed / 22, 0, 1);
   s.x += latRate * dt + s.wind * dt * (s.alt > 0.05 ? 1 : 0.2);
-  s.bank = lerp(s.bank, input.roll, clamp(dt * 5, 0, 1));
+  if (s.aero) s.bank = Math.sin(s.attRoll);
+  else s.bank = lerp(s.bank, input.roll, clamp(dt * 5, 0, 1));
   // A stalled wing drops the nose on its own — the visual pitch follows
-  // the stall down even while the pilot is still pulling.
+  // the stall down even while the pilot is still pulling. On the
+  // aerobatic path the camera's pitch readout follows the attitude's
+  // sine (bounded, so the chase frame swings with the loop without
+  // ever flipping); the mesh itself reads attPitch/attRoll directly.
   s.pitchVis = lerp(s.pitchVis, s.stalled ? -0.75 : clamp(s.vs / 8, -1, 1), clamp(dt * 4, 0, 1));
+  if (s.aero && !s.stalled) s.pitchVis = lerp(s.pitchVis, Math.sin(s.attPitch), clamp(dt * 6, 0, 1));
 
   s.dist += s.speed * dt;
 
@@ -215,8 +284,91 @@ export function stepFlight(s, input, dt) {
   if (!s.airborne && s.runwayM > 0 && s.dist > s.runwayM) {
     s.overrun = true;
     finishFlight(s);
+  } else if (s.stripTouch && s.alt <= 0.01 && s.speed <= TAXI_SPEED
+    && Math.abs(s.x) <= STRIP_HALF && s.maxAlt >= 3) {
+    // Down on the destination strip and slowed to a taxi (v15.3):
+    // the delivery is complete HERE, graded on the touchdown she
+    // made — she does not owe the strip its last metres.
+    s.done = true;
+    s.outcome = 'landed';
+    s.touchdown = s.stripTouch;
   } else if (s.dist >= s.legDist) finishFlight(s);
   return s;
+}
+
+// ---- aerobatics (v15.3): the DIRECT handling's true attitude ----
+// The standard model above flies a vertical-speed demand: the nose
+// can point up or down on the gauge, but the airframe never truly
+// rotates. This path — entered only by flights created with
+// aero: true — integrates the airframe's own pitch and roll from
+// the stick, so a held pull carries her THROUGH a full loop and a
+// held roll through a full barrel roll. Lift follows the wing: its
+// vertical worth is lift × cos(pitch) × cos(roll), so inverted at
+// the loop's top the wing pulls her DOWN, and the speed she traded
+// for height on the way up (AERO_BLEED along the nose line) is the
+// speed she is missing at the top — fast entries loop, slow entries
+// stall, and a stalled wing drags the nose into a dive until speed
+// is bought back. Returns the step's vertical-speed demand; the
+// shared tail of stepFlight (impact test, clamps, integration,
+// sampled VS) judges it exactly like any other demand.
+const TAU = Math.PI * 2;
+function aeroStep(s, input, dt, onGround, flow) {
+  s.stalled = !onGround && s.speed < STALL;
+  if (onGround) {
+    // On the deck the airframe stays aligned: she can rotate for
+    // takeoff (a modest nose-up against the stick) but she cannot
+    // roll, and the stunt accumulators reset — a stunt is an
+    // airborne thing or it is nothing.
+    s.attRoll = 0;
+    s.stuntPitch = 0; s.stuntRoll = 0;
+    const target = input.pitch > 0 ? Math.min(input.pitch, 1) * 0.38 : 0;
+    s.attPitch = lerp(s.attPitch, target, clamp(dt * 3, 0, 1));
+  } else {
+    // Authority fades with airflow and collapses in the stall.
+    const authority = s.stalled ? 0.12 : 0.3 + 0.7 * flow;
+    const dP = input.pitch * AERO_PITCH_RATE * authority * dt;
+    const dR = input.roll * AERO_ROLL_RATE * (s.stalled ? 0.35 : 1) * dt;
+    s.attPitch += dP;
+    s.attRoll += dR;
+    if (s.stalled) {
+      // The dropped nose: attitude is dragged toward a dive, hard
+      // enough that no held stick out-pulls it — a stalled loop is
+      // not a loop that is taking longer, it is a loop that failed.
+      s.attPitch += (-1.05 - s.attPitch) * Math.min(1, dt * 2.2);
+    }
+    // Stunt detection: signed stick-driven rotation while airborne
+    // and flying. A full turn in one direction banks the stunt;
+    // rotation the other way unwinds the accumulator first, so a
+    // wiggle can never farm what only a committed turn can earn —
+    // and rotation accumulated while stalled counts for nothing:
+    // the wing was not flying her around, it was dropping her.
+    if (!s.stalled) {
+      s.stuntPitch += dP;
+      s.stuntRoll += dR;
+      if (Math.abs(s.stuntPitch) >= TAU) {
+        s.loops += 1;
+        s.stuntEvents.push({ kind: 'loop', dir: Math.sign(s.stuntPitch) });
+        s.stuntPitch -= Math.sign(s.stuntPitch) * TAU;
+      }
+      if (Math.abs(s.stuntRoll) >= TAU) {
+        s.barrelRolls += 1;
+        s.stuntEvents.push({ kind: 'roll', dir: Math.sign(s.stuntRoll) });
+        s.stuntRoll -= Math.sign(s.stuntRoll) * TAU;
+      }
+    }
+    // Gravity along the flight path: climbing trades speed for
+    // height, diving buys it back.
+    s.speed = Math.max(0, s.speed - Math.sin(s.attPitch) * AERO_BLEED * dt);
+  }
+  const lift = clamp((s.speed / LIFT_REF) ** 2, 0, 1);
+  const effLift = lift * Math.cos(s.attPitch) * Math.cos(s.attRoll);
+  // The velocity follows the nose only as far as the wing is truly
+  // flying: at half lift the nose's word is worth barely two-thirds,
+  // so a slow plane pointed at the sky mushes instead of climbing.
+  let wantVs = s.speed * Math.sin(s.attPitch) * 0.9 * (0.3 + 0.7 * lift)
+    - SINK_MAX * (1 - clamp(effLift, -0.6, 1));
+  if (s.stalled && wantVs > 0) wantVs *= 0.3;
+  return wantVs;
 }
 
 // The approach target altitude (metres) for a given distance-to-go.

@@ -11,9 +11,13 @@
   #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
   #ui { position: fixed; inset: 0; overflow: hidden; }
   .screen { position: absolute; inset: 0; display: none; flex-direction: column;
-    align-items: center; padding: 18px 16px; box-sizing: border-box; overflow-y: auto; }
+    align-items: center; padding: 20px 16px 28px; box-sizing: border-box; overflow-y: auto; }
   .screen.on { display: flex; }
-  .panel { background: linear-gradient(180deg, rgba(38, 22, 30, 0.88), rgba(24, 14, 22, 0.86)); border: 1px solid rgba(255, 190, 110, 0.35);
+  /* One content column for every menu (v15.3 layout pass): panels,
+     cards and the mode select all share the same width and margins,
+     and panels size border-box — a card's padding used to ride ON
+     TOP of its 94vw width and push its right edge off the screen. */
+  .panel { box-sizing: border-box; background: linear-gradient(180deg, rgba(38, 22, 30, 0.88), rgba(24, 14, 22, 0.86)); border: 1px solid rgba(255, 190, 110, 0.35);
     border-radius: 14px; padding: 14px 16px; box-shadow: 0 10px 34px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255, 210, 140, 0.14); }
   /* Board tickets sit over the live 3D stage (v15 gate fix): at the
      menu panels' translucency the scene bled through and the ticket
@@ -21,11 +25,11 @@
      near-solid — the same gradient and depth, a denser body. */
   #scr-board .panel { background: linear-gradient(180deg, rgba(38, 22, 30, 0.97), rgba(24, 14, 22, 0.96)); }
   /* The mode select (v15): five cards in the menu's own language. */
-  .modepanel { margin-top: 16px; width: min(600px, 94vw); box-sizing: border-box; }
-  .modegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 9px; margin-top: 6px; }
+  .modepanel { margin-top: 16px; width: min(640px, 94vw); box-sizing: border-box; }
+  .modegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 9px; margin-top: 8px; }
   .modecard { background: linear-gradient(160deg, rgba(52, 36, 22, 0.55), rgba(10, 14, 18, 0.45));
     border: 1px solid rgba(242, 165, 65, 0.45); border-radius: 12px; padding: 10px;
-    display: flex; flex-direction: column; gap: 6px; box-shadow: inset 0 1px 0 rgba(255, 210, 140, 0.12); }
+    display: flex; flex-direction: column; gap: 6px; min-height: 118px; box-sizing: border-box; box-shadow: inset 0 1px 0 rgba(255, 210, 140, 0.12); }
   .modename { font-weight: 800; letter-spacing: 1.5px; color: #ffe9c4; font-size: 14px; }
   .modedesc { margin: 0; flex: 1; }
   .modebest { color: #ffc21f; font-weight: 700; font-size: 12px; letter-spacing: 0.5px; }
@@ -88,8 +92,12 @@
     color: #fff6e6; font: 800 15px/1 inherit; letter-spacing: 1.5px; align-items: center; justify-content: center;
     box-shadow: 0 6px 18px rgba(0,0,0,0.45), inset 0 2px 6px rgba(255, 220, 190, 0.35); }
   #firebtn.held { filter: brightness(1.4); }
-  h1.logo { font-size: 52px; letter-spacing: 3px; margin: 26px 0 2px; color: #ffd98f;
+  h1.logo { font-size: 52px; letter-spacing: 3px; margin: 12px 0 2px; color: #ffd98f;
     text-shadow: 0 3px 0 #a33d1c, 0 6px 22px rgba(0,0,0,0.6); font-weight: 800; text-align: center; }
+  /* The title's button column (v15.3): one width, one rhythm — the
+     primary action leads, the rest follow at a uniform measure. */
+  .menucol { display: flex; flex-direction: column; align-items: center; gap: 2px; width: min(640px, 94vw); }
+  .menucol .btn { width: min(330px, 88vw); box-sizing: border-box; }
   .sub { font-size: 16px; letter-spacing: 4px; color: #ffcf9e; margin: 0 0 14px; text-transform: uppercase;
     text-shadow: 0 1px 3px rgba(90, 30, 10, 0.85), 0 0 14px rgba(90, 30, 10, 0.45); font-weight: 700; }
   h2.ptitle, h3.ptitle { font-size: 26px; letter-spacing: 2px; margin: 4px 0 12px; color: #ffd98f; text-align: center;
@@ -115,7 +123,8 @@
   .chip b { color: #ffd98f; }
   .objline { font-size: 15px; color: #ffe1ae; background: rgba(24,14,22,0.7); padding: 7px 16px;
     border-radius: 999px; margin-bottom: 12px; letter-spacing: 0.5px; }
-  .card { width: min(620px, 94vw); margin: 7px 0; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+  .card { width: min(640px, 94vw); margin: 8px 0; display: flow-root; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+  #scr-map .card { width: min(700px, 94vw); }
   .card:hover { border-color: rgba(255, 200, 120, 0.6); }
   .card.sel { outline: 2px solid #f2a541; outline-offset: 1px; }
   /* Ticket furniture (v14): the mission badge, the gold pay pill, the
@@ -189,6 +198,13 @@
     background: rgba(20,12,20,0.85); border: 1px solid rgba(255,190,110,0.55); color: #ffe9c4;
     border-radius: 999px; padding: 9px 20px; font-size: 17px; font-weight: 800; letter-spacing: 1px;
     white-space: nowrap; }
+  /* The stunt callout (v15.3): gold on dark, centred high where the
+     eye already is when the turn closes. */
+  #stunt { position: absolute; left: 50%; top: 96px; transform: translateX(-50%);
+    background: linear-gradient(180deg, rgba(217, 123, 47, 0.94), rgba(180, 79, 29, 0.94));
+    border: 1px solid rgba(255, 217, 143, 0.8); color: #fff6e6;
+    border-radius: 999px; padding: 8px 22px; font-size: 19px; font-weight: 900; letter-spacing: 2px;
+    text-shadow: 0 1px 3px rgba(90, 30, 10, 0.6); box-shadow: 0 6px 20px rgba(0,0,0,0.45); white-space: nowrap; }
   #lookchip { position: absolute; right: 14px; bottom: 118px;
     background: rgba(20,12,20,0.85); border: 1px solid rgba(140, 200, 255, 0.6); color: #cfeaff;
     border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 800; letter-spacing: 1px; }

@@ -207,11 +207,25 @@ export function createAudio(getSettings) {
     }
   }
 
-  // ---- spoken radio (v14) ----
+  // ---- spoken radio (v14; iPad repair v15.3) ----
   // The voice list loads asynchronously on most platforms (and starts
   // empty on iOS until the first getVoices), so it is warmed at context
   // creation and refreshed whenever the platform announces new voices.
+  //
+  // The v15.3 repair: on iPad Safari a speak() that was never primed
+  // by a user gesture is dropped SILENTLY — no sound, no error — so
+  // the v14 tower printed its words and said nothing. Three fixes:
+  // primeRadio() speaks a silent utterance from inside the first
+  // gesture (and resumes the WebAudio context there too); every
+  // utterance carries a health watchdog — no onstart within ~600 ms,
+  // an error, or a voice list that stays empty long after priming
+  // marks TTS unhealthy for the session; and an unhealthy TTS routes
+  // the radio to the formant voice below, which rides the WebAudio
+  // path the music and SFX already prove audible on her device.
   let speechVoices = [];
+  let ttsHealth = 'unknown'; // 'ok' | 'bad' — 'bad' is sticky for the session
+  let ttsPrimed = false, primeAt = 0;
+  let lastRoute = null; // 'tts' | 'formant' — the last radioVoice decision
   function primeSpeechVoices() {
     try {
       const g = typeof window !== 'undefined' ? window : null;
@@ -226,6 +240,39 @@ export function createAudio(getSettings) {
     const starts = p => speechVoices.find(v => (v.lang || '').toLowerCase().startsWith(p));
     return starts(want + '-') || starts(want) || (want === 'id' ? starts('en') : null) || null;
   }
+  // The health watchdog: a healthy platform starts an utterance
+  // almost at once. Silence past ~600 ms means the channel dropped
+  // it (the iOS failure), and the session's radio reroutes to the
+  // formant voice. A cancellation is not a failure — the queue
+  // cancels on purpose whenever a new call pre-empts the channel.
+  function watchUtterance(u) {
+    let settled = false;
+    const timer = setTimeout(() => { if (!settled) { settled = true; ttsHealth = 'bad'; } }, 600);
+    u.onstart = () => { settled = true; clearTimeout(timer); if (ttsHealth !== 'bad') ttsHealth = 'ok'; };
+    u.onerror = (e) => {
+      settled = true; clearTimeout(timer);
+      if (e && (e.error === 'canceled' || e.error === 'interrupted')) return;
+      ttsHealth = 'bad';
+    };
+  }
+  // Prime the spoken channel from inside a user gesture: resume the
+  // WebAudio context, unpause synthesis, and speak one silent
+  // utterance — the invitation iOS requires before any later,
+  // gesture-less speak() is allowed to make a sound. Idempotent.
+  function primeRadio() {
+    ensure();
+    const g = typeof window !== 'undefined' ? window : null;
+    if (!g || radioEngine(g) !== 'tts') return;
+    try { if (g.speechSynthesis.paused) g.speechSynthesis.resume(); } catch { /* garnish */ }
+    if (ttsPrimed) return;
+    ttsPrimed = true; primeAt = Date.now();
+    try {
+      const u = new g.SpeechSynthesisUtterance(' ');
+      u.volume = 0; u.rate = 2;
+      watchUtterance(u);
+      g.speechSynthesis.speak(u);
+    } catch { ttsHealth = 'bad'; }
+  }
   // Speak one transmission. Returns the seconds the channel stays busy,
   // or 0 when speech failed — the caller then falls back to the formant
   // voice, so a speechless platform sounds exactly like v13.
@@ -233,6 +280,10 @@ export function createAudio(getSettings) {
     try {
       const g = typeof window !== 'undefined' ? window : null;
       if (!g || radioEngine(g) !== 'tts') return 0;
+      if (ttsHealth === 'bad') return 0; // the session already rerouted
+      // A voice list that stays empty long after priming is a broken
+      // TTS wearing a healthy disguise: do not trust the channel.
+      if (ttsPrimed && !speechVoices.length && Date.now() - primeAt > 1500) { ttsHealth = 'bad'; return 0; }
       const { pitch, rate } = radioSpeechParams(speaker);
       // The channel still clicks open first: squelch and a call beep on
       // the radio bus, as the formant voice always had.
@@ -250,6 +301,7 @@ export function createAudio(getSettings) {
       if (v) u.voice = v;
       u.pitch = pitch; u.rate = rate;
       u.volume = Math.max(0, Math.min(1, (s.radio ?? 4) / 5));
+      watchUtterance(u);
       synth.speak(u);
       return estimateSpeechSeconds(text, rate) + 0.3;
     } catch { return 0; }
@@ -266,13 +318,31 @@ export function createAudio(getSettings) {
   // The radio's mouth, chosen per transmission (v14): real speech where
   // the platform offers it, the v13 formant voice everywhere else. The
   // printed strip is identical either way; only the sound changes.
+  // The routing decision is recorded (lastRoute) so the settings test
+  // and the diagnostics can say which mouth actually spoke.
   function radioVoice(text, speaker) {
     if (!ensure()) return 0;
     const s = getSettings();
     if (!s.master || (s.radio ?? 4) === 0) return 0;
     const spoken = speakRadio(text, speaker, s);
-    if (spoken > 0) return spoken;
+    if (spoken > 0) { lastRoute = 'tts'; return spoken; }
+    lastRoute = 'formant';
     return formantVoice(text, speaker);
+  }
+  // The settings TEST RADIO path: prime (the tap IS the gesture) and
+  // speak one line through the exact routing radioVoice uses.
+  function testRadio(text) {
+    primeRadio();
+    return radioVoice(text, 'tower');
+  }
+  // Diagnostics: which engine the platform offers, what the session
+  // health check concluded, and which mouth spoke last.
+  function radioState() {
+    const g = typeof window !== 'undefined' ? window : null;
+    return { engine: g ? radioEngine(g) : 'formant', ttsHealth, lastRoute, voices: speechVoices.length, primed: ttsPrimed };
+  }
+  function forceTtsHealth(h) {
+    if (h === 'bad' || h === 'ok' || h === 'unknown') ttsHealth = h;
   }
 
   // ---- the airport radio, formant fallback (v13) ----
@@ -342,5 +412,6 @@ export function createAudio(getSettings) {
   return { ensure, applyLevels, startMusic, stopMusic, jingle,
            engineStart, engineSet, engineStop, windStart, windSet, windStop,
            rainStart, rainSet, rainStop, blip, radioVoice, radioStop,
+           primeRadio, testRadio, radioState, forceTtsHealth,
            hasContext: () => !!ctx };
 }

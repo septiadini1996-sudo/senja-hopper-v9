@@ -1860,7 +1860,13 @@ export function createScene(R, assets) {
     // stared into the wing strut). The horizon, the rings and the strip are
     // the cockpit's instruments.
     if (st.camMode !== 'cockpit' && !st.noPlane) {
-      const planeM = M4.compose(st.x, st.alt + 0.62, pz, st.pitchVis * 0.38, -st.bank * 0.22, -st.bank * 0.55, st.planeScale || 1);
+      // Aerobatics (v15.3): a DIRECT flight carries its true attitude
+      // — the mesh rotates by attPitch/attRoll themselves, so a loop
+      // is a loop and a barrel roll rolls all the way around. Every
+      // other state keeps the pitchVis/bank dress it has always worn.
+      const rx = st.attPitch != null ? st.attPitch : st.pitchVis * 0.38;
+      const rz = st.attRoll != null ? -st.attRoll : -st.bank * 0.55;
+      const planeM = M4.compose(st.x, st.alt + 0.62, pz, rx, -st.bank * 0.22, rz, st.planeScale || 1);
       R.draw(assets.plane.plane, planeM);
       const propM = M4.mul(planeM, M4.compose(0, 1.00, -3.42, 0, 0, st.propSpin));
       R.draw(assets.plane.prop, propM);
