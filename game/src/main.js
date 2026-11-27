@@ -4,8 +4,8 @@
 // Every control scheme writes into ONE normalized frame, so switching
 // schemes mid-flight changes only who is holding the controls — never
 // the flight itself.
-import { createRenderer, M4 } from './engine3d.js';
-import { buildPlane, buildJet, buildJetFanBlur, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, buildDrone, cloudField, createScene } from './scene3d.js';
+import { createRenderer, M4, sub3, cross3, norm3 } from './engine3d.js';
+import { buildPlane, buildJet, buildJetFanBlur, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, buildDrone, buildTracer, buildFlash, cloudField, createScene } from './scene3d.js';
 import { cockpitState } from './cockpit.js';
 import { createFlight, stepFlight, settleFlight, guidance, objectiveState, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
@@ -20,8 +20,8 @@ import { minimapRoute, minimapPlane } from './minimap.js';
 import { createPreviewState, previewSelect, previewPose } from './preview.js';
 import { makeFrame, keyboardFrame, stickFrame, sliderValue, touchFrame, gyroFrame, gyroButtons, conditionFrame } from './input-core.js';
 import { pilotFrame } from './demo-pilot.js';
-import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, patrolGuide, createPatrol, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
-import { clamp, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
+import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, patrolGuide, createPatrol, GUN_RANGE, GUN_DMG, DRONE_HP, ESCORT_POINTS, applyGunDamage, stepLock, resolveLockedShot, leadPoint, escortCountForWave, createEscort, banditFrame, banditFireSolution, banditBurstDamage, ESCORTS, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
+import { clamp, mulberry32, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
 
 const $ = s => document.querySelector(s);
 const ui = $('#ui');
@@ -87,7 +87,11 @@ function pollRadio() {
   const msgs = radioPoll(radio, flightCtx.flight, { type: flightCtx.ticket.type || 'cargo', weather: envNow.state,
     mode: flightCtx.mode ? flightCtx.mode.kind : null,
     downed: flightCtx.mode && flightCtx.mode.patrol ? flightCtx.mode.patrol.downed : 0,
-    wave: flightCtx.mode && flightCtx.mode.patrol ? flightCtx.mode.patrol.wave : 0 });
+    wave: flightCtx.mode && flightCtx.mode.patrol ? flightCtx.mode.patrol.wave : 0,
+    bandit: !!(flightCtx.mode && flightCtx.mode.patrol && flightCtx.mode.patrol.banditSeen),
+    underFire: !!(flightCtx.mode && flightCtx.mode.patrol && flightCtx.mode.patrol.hurtAge < 8),
+    hullCrit: !!(flightCtx.mode && flightCtx.mode.patrol && flightCtx.mode.patrol.hp <= 35 && flightCtx.mode.patrol.hp > 0),
+    banditsDown: flightCtx.mode && flightCtx.mode.patrol ? flightCtx.mode.patrol.banditsDown : 0 });
   for (const m of msgs) {
     radioLog.push(m.key);
     if ((save.settings.radio ?? 4) > 0) radioQueue.push(m);
@@ -824,6 +828,18 @@ function buildHud() {
   const dmark = el('div'); dmark.id = 'dmark'; dmark.style.display = 'none';
   dmark.innerHTML = '<i class="dm-dia"></i><span class="dm-lab"></span>';
   ui.append(dmark);
+  // The lock bracket (v15.2): four corners that ride the locked
+  // target itself, with its name, range and hull — orange while the
+  // lock is still biting, red once it holds. Positioned every HUD
+  // pass by drawLockBracket, which also walks the gunsight onto the
+  // target's lead point.
+  const lkb = el('div'); lkb.id = 'lockbox'; lkb.style.display = 'none';
+  lkb.innerHTML = '<i class="lk-c tl"></i><i class="lk-c tr"></i><i class="lk-c bl"></i><i class="lk-c br"></i><span class="lk-lab"></span><span class="lk-hp"><i class="lk-fill"></i></span>';
+  ui.append(lkb);
+  // The damage vignette (v15.2): a red edge that flashes when a
+  // bandit's burst lands and smoulders while the hull is critical.
+  const dvig = el('div'); dvig.id = 'dmgvig'; dvig.style.opacity = '0';
+  ui.append(dvig);
   // Pause overlay
   const pause = el('div'); pause.id = 'pause';
   const pcard = el('div', 'panel'); pcard.style.cssText = 'display:flex;flex-direction:column;align-items:center;';
@@ -910,7 +926,12 @@ function updateModeChrome() {
   if (fb) { fb.style.display = patrol ? 'flex' : 'none'; fb.textContent = t('fire'); }
   const sg = $('#sight');
   if (sg) sg.style.display = patrol && camMode !== 'cockpit' ? 'block' : 'none';
-  if (!patrol) { const dm = $('#dmark'); if (dm) dm.style.display = 'none'; }
+  if (!patrol) {
+    const dm = $('#dmark'); if (dm) dm.style.display = 'none';
+    const lb = $('#lockbox'); if (lb) lb.style.display = 'none';
+    if (sg) { sg.style.left = ''; sg.style.top = ''; sg.classList.remove('locked'); }
+    const dv = $('#dmgvig'); if (dv) dv.style.opacity = '0';
+  }
 }
 // The guide marker's placement (v15.1): the nearest drone projected
 // through the same pinhole the gunsight judges by — the plane's own
@@ -939,6 +960,78 @@ function drawDroneGuide(f) {
   dm.style.top = (fy * H) + 'px';
   const lab = dm.querySelector('.dm-lab');
   if (lab) lab.textContent = `DRONE ${arrow} ${Math.max(0, Math.round(g.range))} M`;
+}
+
+// Project a world point through the chase camera the scene actually
+// flies (v15.2): the same eye and aim the renderer builds, so the
+// lock bracket sits ON its target in the rendered frame, not on a
+// bearing abstraction. Returns viewport pixels, or null when the
+// point rides behind the camera. The cockpit keeps its own panel —
+// the bracket belongs to the chase and far views, like the sight.
+function projectHud(px, py, pz) {
+  const f = flightCtx.flight;
+  const cm = planeById(save.planes.active).camMul || 1;
+  const far = camMode === 'far';
+  const eye = [f.x * 0.84, f.alt + 5.4 * cm + (far ? 4.5 : 0), -f.dist + (far ? 30 : 16.5) * cm];
+  const tgt = [f.x * 0.94 - f.bank * 2.2, f.alt + 2.4 + f.pitchVis * 5.5, -f.dist - 30];
+  const zc = norm3(sub3(eye, tgt));
+  const xc = norm3(cross3([0, 1, 0], zc));
+  const yc = cross3(zc, xc);
+  const v = sub3([px, py, pz], eye);
+  const cx = v[0] * xc[0] + v[1] * xc[1] + v[2] * xc[2];
+  const cy = v[0] * yc[0] + v[1] * yc[1] + v[2] * yc[2];
+  const cz = v[0] * zc[0] + v[1] * zc[1] + v[2] * zc[2];
+  if (cz >= -0.5) return null;
+  const W = window.innerWidth || 1280, H = window.innerHeight || 720;
+  const tanY = Math.tan(1.05 / 2), tanX = tanY * (W / H);
+  return { x: (0.5 + (cx / -cz) / tanX / 2) * W, y: (0.5 - (cy / -cz) / tanY / 2) * H };
+}
+
+// The lock bracket (v15.2): while the sight's lock works a target —
+// acquiring or held — the bracket rides the target's rendered place
+// with its kind, range and hull bar. The colour is the state at a
+// glance: orange corners while the lock bites, red once it holds.
+// And while it holds, the gunsight itself leaves its pin and
+// converges on the target's LEAD point — the aim walks onto the
+// target, which is where locked bursts are judged.
+function drawLockBracket(f) {
+  const lb = $('#lockbox'); if (!lb) return;
+  const sg = $('#sight');
+  const m = flightCtx && flightCtx.mode;
+  const release = () => { if (sg) { sg.style.left = ''; sg.style.top = ''; sg.classList.remove('locked'); } };
+  if (!m || m.kind !== 'patrol' || screen !== 'flight' || camMode === 'cockpit') { lb.style.display = 'none'; release(); return; }
+  const lock = m.patrol.lock, tgt = lock.target;
+  if (!tgt || !tgt.alive || tgt.escaped) { lb.style.display = 'none'; release(); return; }
+  const pos = projectHud(tgt.x, tgt.altM, -tgt.dist);
+  if (!pos) { lb.style.display = 'none'; release(); return; }
+  lb.style.display = 'block';
+  lb.style.left = pos.x + 'px';
+  lb.style.top = pos.y + 'px';
+  lb.classList.toggle('locked', !!lock.locked);
+  const range = Math.round(Math.hypot(tgt.x - f.x, tgt.dist - f.dist, tgt.altM - f.alt));
+  const lab = lb.querySelector('.lk-lab');
+  if (lab) lab.textContent = `${t(tgt.kind === 'escort' ? 'tgt_bandit' : 'tgt_drone')} · ${range} M · ${lock.locked ? t('locked_on') : t('locking')}`;
+  const fill = lb.querySelector('.lk-fill');
+  if (fill) fill.style.width = clamp(tgt.hp / (tgt.maxHp || DRONE_HP) * 100, 0, 100) + '%';
+  if (sg && lock.locked) {
+    const lead = leadPoint(tgt, f);
+    const lp = projectHud(lead.x, lead.altM, -lead.dist);
+    if (lp) { sg.style.left = lp.x + 'px'; sg.style.top = lp.y + 'px'; sg.classList.add('locked'); }
+    else release();
+  } else release();
+}
+
+// The damage vignette's pump (v15.2): a flash that decays over half
+// a second from the last burst that landed, over a low smoulder
+// while the hull is critical. Runs every frame from the main loop.
+function pumpDamage() {
+  const dv = $('#dmgvig'); if (!dv) return;
+  const m = flightCtx && flightCtx.mode;
+  if (!m || m.kind !== 'patrol' || screen !== 'flight') { dv.style.opacity = '0'; return; }
+  const p = m.patrol;
+  const flash = clamp(1 - p.hurtAge / 0.55, 0, 1) * 0.62;
+  const low = p.hp > 0 && p.hp < 35 ? 0.15 + 0.05 * Math.sin(ambient * 5) : 0;
+  dv.style.opacity = String(Math.max(flash, low));
 }
 
 // ---------- flight lifecycle ----------
@@ -1140,6 +1233,10 @@ function startMode(kind) {
   startFlight(ticket);
   flightCtx.mode = mode;
   flightCtx.booms = [];
+  // The fight's light (v15.2): tracers, muzzle flashes, hit sparks
+  // and the hurt patrol's smoke — staged by stepMode, drawn by the
+  // scene, aged by the step that made them.
+  flightCtx.tracers = []; flightCtx.flashes = []; flightCtx.sparks = []; flightCtx.smokes = [];
   if (kind === 'patrol') {
     mode.patrol.wave = 1;
     // Dealt into her own sky (v15.1): from the state she takes off in,
@@ -1172,6 +1269,151 @@ function initRace() {
     r.mesh = R ? { set: buildPlane(R, { ...base, ...r.def.spec }), scale: r.def.spec.scale || 1 } : null;
   });
 }
+// ---------- SKY PATROL: the fight's wiring (v15.2) ----------
+// modes.js owns the fight's arithmetic (lock, damage, the bandit's
+// brain); everything here is the wiring — flight states for the
+// escorts, the tracers and flashes both sides leave on the sky, and
+// the ledger's bookkeeping when a burst lands.
+function patrolTargets(p) { return [...p.drones, ...p.escorts]; }
+
+// An escort joins the fight: a real flight state of her own, dealt
+// 650 m behind the patrol — outside her own guns' reach, close
+// enough that her first pass comes inside half a minute — wearing
+// one of the smuggler liveries on the game's own airframes.
+function spawnEscort(m, p, slot, behindM) {
+  const f = flightCtx.flight;
+  const def = ESCORTS[slot % ESCORTS.length];
+  const base = planeById(def.planeId);
+  const mine = planeById(save.planes.active);
+  const esc = createEscort(p.wave * 10 + slot, slot);
+  const ef = createFlight({
+    legDist: 100000, rings: [],
+    engineLvl: save.upgrades.engine, hullLvl: save.upgrades.hull,
+    wind: f.wind, runwayM: 0,
+    speedMul: mine.speedMul * 1.10, climbMul: base.climbMul, accelMul: base.accelMul || 1,
+    respMul: 1, assist: false,
+  });
+  ef.airborne = true;
+  ef.dist = Math.max(40, f.dist - (behindM != null ? behindM : 650));
+  ef.alt = clamp(f.alt + (slot % 2 ? 6 : -4), 18, 85);
+  ef.maxAlt = ef.alt;
+  ef.x = f.x + esc.side * 34;
+  ef.speed = Math.max(26, f.speed);
+  esc.flight = ef;
+  esc.dist = ef.dist; esc.x = ef.x; esc.altM = ef.alt;
+  esc.mesh = R ? { set: buildPlane(R, { ...base, ...def.spec }), scale: def.spec.scale || 1 } : null;
+  p.escorts.push(esc);
+  p.banditSeen = true;
+  return esc;
+}
+
+// The wave table says how many escorts the smugglers fly; the patrol
+// keeps that many in the sky, replacing the fallen.
+function topUpEscorts(m, p) {
+  const want = escortCountForWave(p.wave);
+  let live = p.escorts.filter(e => e.alive).length;
+  while (live < want) { spawnEscort(m, p, p.escorts.length); live += 1; }
+}
+
+// Fly every live escort one step: the bandit's brain on the stick,
+// the flight model under it, and a burst whenever her tail sits in
+// its sights. A bandit whose own flying puts it in the sea is gone
+// uncounted — the patrol claims no kill she did not make.
+function stepEscorts(m, p, dt) {
+  const ctx = flightCtx, f = ctx.flight;
+  for (const esc of p.escorts) {
+    if (!esc.alive) continue;
+    const ef = esc.flight;
+    if (!ef || ef.done) { esc.alive = false; esc.escaped = true; continue; }
+    ef.wind = f.wind;
+    const fr = banditFrame(esc, f, dt);
+    stepFlight(ef, fr, dt);
+    esc.propSpin += dt * (3 + fr.throttle * 34);
+    const pvx = esc.x;
+    esc.dist = ef.dist; esc.x = ef.x; esc.altM = ef.alt;
+    esc.vDist = ef.speed; esc.vX = dt > 0 ? (ef.x - pvx) / dt : 0; esc.vAlt = ef.vs;
+    esc.burstCd = Math.max(0, esc.burstCd - dt);
+    const sol = f.airborne && !ctx.finished ? banditFireSolution(esc, f) : null;
+    if (sol && esc.burstCd <= 0) {
+      esc.burstCd = 0.85;
+      banditFire(m, p, esc, sol);
+    }
+  }
+}
+
+// One bandit burst, made visible and then made felt: the tracer
+// streaks from its nose to her wing and the flash blooms at its
+// muzzle, so incoming fire can be SEEN and flown out of; the damage
+// itself is modes.js' model, evasion and all.
+function banditFire(m, p, esc, sol) {
+  const ctx = flightCtx, f = ctx.flight, ef = esc.flight;
+  ctx.tracers.push({ a: [ef.x, ef.alt + 1.2, -(ef.dist + 3)], b: [f.x, f.alt + 0.9, -f.dist], t0: ambient, enemy: true });
+  ctx.flashes.push({ p: [ef.x, ef.alt + 1.2, -(ef.dist + 3.4)], t0: ambient });
+  audio.blip('gun');
+  const dmg = banditBurstDamage(sol, { bank: f.bank, manoeuvring: p.stickHeat > 0.7 });
+  if (dmg <= 0) return;
+  p.hp = Math.max(0, p.hp - dmg);
+  p.hurtAge = 0;
+  ctx.sparks.push({ x: f.x, altM: f.alt + 0.6, dist: f.dist, t0: ambient });
+  audio.blip('hit');
+  if (p.hp <= 0) shotDown(m, p);
+}
+
+// Her hull is gone: the sortie ends in fire over the lanes. Patrol
+// stays self-contained — no campaign money, no save effects beyond
+// the mode's own best, exactly like a timeout.
+function shotDown(m, p) {
+  const ctx = flightCtx, f = ctx.flight;
+  if (ctx.finished) return;
+  m.shotDown = true;
+  ctx.booms.push({ x: f.x, dist: f.dist, altM: f.alt, t0: ambient });
+  endModeFlight('shotdown');
+}
+
+// One of her bursts lands: sparks at the strike, GUN_DMG off the
+// target's hull, and the kill's bookkeeping when the hull gives out
+// — a drone pays its wave's points, a bandit pays ESCORT_POINTS.
+function damageTarget(m, p, tgt) {
+  const ctx = flightCtx;
+  p.hits += 1;
+  audio.blip('hit');
+  ctx.sparks.push({ x: tgt.x, altM: tgt.altM, dist: tgt.dist, t0: ambient });
+  if (applyGunDamage(tgt, GUN_DMG)) {
+    p.downed += 1;
+    if (tgt.kind === 'escort') { p.banditsDown += 1; p.score += ESCORT_POINTS; }
+    else p.score += patrolWaveSpec(tgt.wave).points;
+    ctx.booms.push({ x: tgt.x, dist: tgt.dist, altM: tgt.altM, t0: ambient });
+  }
+}
+
+// Her trigger, judged. Locked: the burst rides the lock's lead point
+// (modes.js judges the strike, dispersion and all), the tracer drawn
+// to the point the burst was aimed at. Unlocked: the v15 fixed-cone
+// judgement, exactly as it was — except a target now takes GUN_DMG
+// per solid hit instead of falling to the first burst. Either way
+// the muzzle flashes and the tracer streaks: gunfire has light now.
+function fireGuns(m, p) {
+  const ctx = flightCtx, f = ctx.flight;
+  const nose = [f.x, f.alt + 1.2, -(f.dist + 3.4)];
+  ctx.flashes.push({ p: nose, t0: ambient });
+  const lock = p.lock;
+  if (lock.locked && lock.target && lock.target.alive && !lock.target.escaped) {
+    const res = resolveLockedShot(lock, f, mulberry32((m.seed ^ (p.shots * 2654435761)) >>> 0));
+    if (res) {
+      ctx.tracers.push({ a: nose, b: [res.aim.x, res.aim.altM, -res.aim.dist], t0: ambient, enemy: false });
+      if (res.hit) damageTarget(m, p, res.target);
+      return;
+    }
+  }
+  const hit = patrolShot(patrolTargets(p), f);
+  if (hit) {
+    ctx.tracers.push({ a: nose, b: [hit.x, hit.altM, -hit.dist], t0: ambient, enemy: false });
+    damageTarget(m, p, hit);
+  } else {
+    ctx.tracers.push({ a: nose, b: [f.x, f.alt + 1.2, -(f.dist + GUN_RANGE)], t0: ambient, enemy: false });
+  }
+}
+
 function stepMode(dt) {
   const ctx = flightCtx, m = ctx.mode;
   if (!m || ctx.finished) return;
@@ -1179,6 +1421,11 @@ function stepMode(dt) {
   if (m.kind === 'patrol') {
     const p = m.patrol;
     p.left -= dt;
+    p.hurtAge += dt;
+    // How hard she is flying, remembered briefly: a bandit's burst is
+    // judged against this (modes.js states the model) — a big recent
+    // stick input is manoeuvring, and manoeuvring is armour.
+    p.stickHeat = Math.max(Math.abs(frame.pitch), Math.abs(frame.roll), p.stickHeat - dt / 0.6);
     stepDrones(p.drones, f.dist, dt, f.t);
     if (!p.drones.some(d => d.alive && !d.escaped)) {
       p.wave += 1;
@@ -1186,20 +1433,33 @@ function stepMode(dt) {
       // altitude band, her heading — never back at the old fixed sky.
       p.drones.push(...spawnPatrolWave(m.seed, p.wave, { dist: f.dist, x: f.x, alt: f.alt }));
     }
+    topUpEscorts(m, p);
+    stepEscorts(m, p, dt);
+    // The lock works every step, trigger or no: it is the sight's own
+    // attention, and the bracket the HUD draws from it.
+    stepLock(p.lock, patrolTargets(p), f, dt);
     m.cool = Math.max(0, m.cool - dt);
     if ((keys.has('Space') || fireHeld) && f.airborne && m.cool <= 0) {
       m.cool = 0.16;
       p.shots += 1;
       audio.blip('gun');
-      const hit = patrolShot(p.drones, f);
-      if (hit) {
-        hit.alive = false;
-        p.hits += 1; p.downed += 1;
-        p.score += patrolWaveSpec(hit.wave).points;
-        ctx.booms.push({ x: hit.x, dist: hit.dist, altM: hit.altM, t0: ambient });
-        audio.blip('hit');
+      fireGuns(m, p);
+    }
+    // A hurt patrol smokes (v15.2): a light trail under 70 hull, a
+    // heavy one under 40 — damage you can read off her wing.
+    if (p.hp < 70 && p.hp > 0 && f.airborne) {
+      p.smokeAcc = (p.smokeAcc || 0) + dt;
+      const iv = p.hp < 40 ? 0.07 : 0.15;
+      if (p.smokeAcc >= iv) {
+        p.smokeAcc = 0;
+        ctx.smokes.push({ x: f.x, altM: f.alt + 0.5, dist: f.dist - 5, t0: ambient, heavy: p.hp < 40 });
       }
     }
+    // The fight's light ages out fast; the smoke lingers a breath.
+    ctx.tracers = ctx.tracers.filter(x => ambient - x.t0 < 0.14);
+    ctx.flashes = ctx.flashes.filter(x => ambient - x.t0 < 0.12);
+    ctx.sparks = ctx.sparks.filter(x => ambient - x.t0 < 0.35);
+    ctx.smokes = ctx.smokes.filter(x => ambient - x.t0 < 1.7);
     if (p.left <= 0) endModeFlight('time');
   } else if (m.kind === 'rush') {
     const r = m.rush;
@@ -1240,7 +1500,8 @@ function finishModeFlight() {
   ctx.wxPin = null;
   const f = ctx.flight, m = ctx.mode;
   audio.engineStop(); audio.windStop(); audio.rainStop(); audio.radioStop();
-  if (f.exploded) { ctx.boom = { x: f.x, dist: f.dist, t0: ambient }; audio.blip('boom'); audio.jingle('lose'); }
+  if (m.shotDown) { ctx.boom = { x: f.x, dist: f.dist, t0: ambient }; audio.blip('boom'); audio.jingle('lose'); }
+  else if (f.exploded) { ctx.boom = { x: f.x, dist: f.dist, t0: ambient }; audio.blip('boom'); audio.jingle('lose'); }
   else if (f.outcome === 'splash') audio.blip('splash');
   else if (f.outcome === 'landed') audio.blip('thud', 0.3);
   if (m.kind === 'patrol') m.newBest = recordPatrol(save.modes, m.patrol.score, m.patrol.downed);
@@ -1272,10 +1533,11 @@ function renderModeReceipt() {
   card.append(head);
   let title = '';
   if (m.kind === 'patrol') {
-    title = t('rc_patrol_title');
+    title = m.endReason === 'shotdown' ? t('rc_patrol_shotdown') : t('rc_patrol_title');
     const p = m.patrol;
     card.append(
       row(t('rc_patrol_downed'), String(p.downed)),
+      ...(p.banditsDown > 0 ? [row(t('rc_patrol_bandits'), String(p.banditsDown))] : []),
       row(t('rc_patrol_shots'), `${p.shots} · ${p.hits}`),
       row(t('rc_patrol_acc'), Math.round(patrolAccuracy(p) * 100) + '%'),
       row(t('rc_patrol_wave'), String(p.wave)),
@@ -1321,7 +1583,7 @@ function renderModeReceipt() {
 }
 // Stage a patrol for the dossier and the feel tests: airborne on the
 // lane with a drone pinned in the gunsight, close enough to read. The
-// dossier flies it point-blank (32 m) — a 3 m drone at test distance
+// dossier flies it close (40 m) — a 3 m drone at test distance
 // reads as a speck at thumbnail size — the test keeps its 130 m
 // firing window.
 function stagePatrol(aheadM = 130) {
@@ -1405,6 +1667,7 @@ function updateHud() {
       if (objEl2) objEl2.innerHTML = t('hud_patrol', { n: m.patrol.downed, s: m.patrol.score });
       guide.textContent = t('guide_patrol', { w: m.patrol.wave });
       drawDroneGuide(f);
+      drawLockBracket(f);
       $('#timer').textContent = fmtClock(Math.max(0, m.patrol.left));
       $('#hud-rings').innerHTML = `${t('wave', { n: m.patrol.wave })} <b>${m.patrol.drones.filter(d => d.alive && !d.escaped).length}</b>`;
       $('#hud-dest').innerHTML = `▸ <b>${t('mode_patrol')}</b>`;
@@ -1488,6 +1751,19 @@ function drawRadar(f) {
     g.strokeStyle = 'rgba(255, 217, 168, 0.85)'; g.lineWidth = 1; g.strokeRect(-3.4, -3.4, 6.8, 6.8);
     g.restore();
   }
+  // The bandits (v15.2): dark-red triangles on the same scope — the
+  // mark that matters most is the one closing on her tail.
+  if (pm && pm.kind === 'patrol') {
+    for (const e of pm.patrol.escorts) {
+      if (!e.alive) continue;
+      const [ex, ey] = plot(e.x - f.x, e.dist - f.dist);
+      g.save(); g.translate(ex, ey);
+      g.beginPath(); g.moveTo(0, 5.2); g.lineTo(4.8, -3.8); g.lineTo(-4.8, -3.8); g.closePath();
+      g.fillStyle = '#c22418'; g.fill();
+      g.strokeStyle = 'rgba(255,217,168,0.9)'; g.lineWidth = 1; g.stroke();
+      g.restore();
+    }
+  }
   // The plane: a wedge at the centre, leaning with her bank.
   g.save();
   g.translate(cx, cy); g.rotate(-f.bank * 0.5);
@@ -1521,6 +1797,20 @@ function drawGauges(f) {
   dial(150, (f.alt / FT) / 350, fmtFeet(f.alt), 'FT', 'ALT');
   const vsFpm = Math.round(f.vs / FT * 60 / 10) * 10;
   dial(248, (f.vs + 8) / 16, (vsFpm > 0 ? '+' : '') + vsFpm, 'FT/MIN', 'VS');
+  // The patrol's hull (v15.2): a bar riding under the dials for the
+  // length of the sortie — green past half, amber to a quarter, red
+  // below — with the number the receipt will remember her by.
+  const pm2 = flightCtx && flightCtx.mode;
+  if (pm2 && pm2.kind === 'patrol') {
+    const hp = Math.max(0, pm2.patrol.hp);
+    g.fillStyle = '#f3d9b0'; g.font = '700 10px system-ui'; g.textAlign = 'left';
+    g.fillText(t('hull'), 16, 127);
+    g.fillStyle = '#fff3da'; g.font = '800 11px system-ui'; g.textAlign = 'right';
+    g.fillText(String(Math.ceil(hp)), 284, 127);
+    g.fillStyle = 'rgba(255,220,160,0.18)'; g.fillRect(16, 132, 268, 9);
+    g.fillStyle = hp > 50 ? '#7dd069' : hp > 25 ? '#f2a541' : '#ff4030';
+    g.fillRect(16, 132, 268 * (hp / 100), 9);
+  }
 }
 
 // The route box (v14): the leg at a glance. Both islands are drawn
@@ -1579,6 +1869,14 @@ function drawMinimap(f) {
       const [mx, my] = markAt(d.dist, d.x);
       g.save(); g.translate(mx, my); g.rotate(Math.PI / 4);
       g.fillStyle = '#ff5030'; g.fillRect(-2.6, -2.6, 5.2, 5.2);
+      g.restore();
+    }
+    for (const e of mm.patrol.escorts) {
+      if (!e.alive) continue;
+      const [mx, my] = markAt(e.dist, e.x);
+      g.save(); g.translate(mx, my);
+      g.beginPath(); g.moveTo(0, 4); g.lineTo(3.6, -3); g.lineTo(-3.6, -3); g.closePath();
+      g.fillStyle = '#c22418'; g.fill();
       g.restore();
     }
   } else if (mm && mm.kind === 'race') {
@@ -1662,6 +1960,9 @@ if (R) {
     destShallows: buildDestShallows(R),
     boom: buildExplosion(R),
     drone: buildDrone(R),
+    tracerOwn: buildTracer(R, [3.4, 2.3, 0.9]),
+    tracerEnemy: buildTracer(R, [3.6, 0.55, 0.45]),
+    flash: buildFlash(R),
     bird: buildBird(R),
     beacon: buildBeacon(R),
     flag: buildFlag(R),
@@ -1696,8 +1997,20 @@ function stageState() {
       // A water-crash debrief stages over the sea, not the strip (v15
       // gate fix): once a splash has ended the flight, the intact plane
       // no longer poses behind the receipt — the smoke marks the spot.
-      noPlane: !!(flightCtx.finished && f.outcome === 'splash'),
+      noPlane: !!(flightCtx.finished && f.outcome === 'splash') || !!(flightCtx.finished && flightCtx.mode && flightCtx.mode.shotDown),
       drones: flightCtx.mode && flightCtx.mode.kind === 'patrol' ? flightCtx.mode.patrol.drones : null,
+      // The bandits and the fight's light (v15.2): escort airframes
+      // staged like the race rivals, and the tracer/flash/spark/smoke
+      // lists aged against the ambient clock — a staged entry may pin
+      // its own age, which is how the dossier frame holds a burst
+      // mid-flight forever.
+      bandits: flightCtx.mode && flightCtx.mode.kind === 'patrol' ? flightCtx.mode.patrol.escorts.filter(e => e.alive && e.flight).map(e => ({
+        x: e.flight.x, alt: e.flight.alt, dist: e.flight.dist, bank: e.flight.bank, pitchVis: e.flight.pitchVis,
+        propSpin: e.propSpin, throttle: 0.85, mesh: e.mesh })) : null,
+      tracers: (flightCtx.tracers || []).map(x => ({ a: x.a, b: x.b, enemy: !!x.enemy, age: x.age != null ? x.age : ambient - x.t0 })),
+      flashes: (flightCtx.flashes || []).map(x => ({ p: x.p, age: x.age != null ? x.age : ambient - x.t0 })),
+      sparks: (flightCtx.sparks || []).map(x => ({ x: x.x, altM: x.altM, dist: x.dist, age: x.age != null ? x.age : ambient - x.t0 })),
+      smokes: (flightCtx.smokes || []).map(x => ({ x: x.x, altM: x.altM, dist: x.dist, heavy: !!x.heavy, age: x.age != null ? x.age : ambient - x.t0 })),
       booms: flightCtx.booms ? flightCtx.booms.map(b => ({ x: b.x, dist: b.dist, altM: b.altM, age: ambient - b.t0 })) : null,
       rivals: flightCtx.mode && flightCtx.mode.kind === 'race' ? flightCtx.mode.race.rivals.filter(r => r.flight).map((r, i) => ({
         x: r.flight.x, alt: r.flight.alt, dist: r.flight.dist, bank: r.flight.bank, pitchVis: r.flight.pitchVis,
@@ -1836,6 +2149,7 @@ function loop(ts) {
     : envNow.state === 'storm' ? 'storm' : (save.clockH >= 19 || save.clockH < 5.2) ? 'night' : 'day';
   if (mood !== musicMood) { musicMood = mood; audio.startMusic(mood); }
   pumpRadio(ambient);
+  pumpDamage();
   audio.rainSet(flightCtx && screen === 'flight' ? envNow.rain : 0);
   if (screen === 'flight' && flightCtx && !paused && !flightCtx.finished && !flightCtx.frozen) {
     acc += dt;
@@ -2029,15 +2343,30 @@ if (shot === 'flight' || shot === 'receipt') {
   flightCtx.wxPin = 'clear';
   envNow = skyAt(save.day, save.clockH, flightCtx.wxPin);
   flightCtx.weather = envNow.state;
-  stagePatrol(26);
+  stagePatrol(40);
   // The reticle is a DOM element pinned at 46% height; the camera's
   // own centre sits lower, so a drone at the plane's altitude renders
   // under the sight, behind the prop disc. Raise the staged drone
   // into the ring the sight actually draws.
   const dr = flightCtx.mode.patrol.drones.find(d => d.alive && !d.escaped);
-  if (dr) { dr.baseAlt = 33.5; dr.altM = 33.5; dr.baseX = 0; dr.x = 0; }
+  if (dr) { dr.baseAlt = 33.5; dr.altM = 33.5; dr.baseX = 0; dr.x = 0; dr.hp = 18; }
   const pp = flightCtx.mode.patrol;
   pp.downed = 1; pp.hits = 3; pp.shots = 5; pp.score = 100;
+  // The combat money frame (v15.2): the lock HELD on the staged
+  // drone — bracket on the target with its hull bar, the sight walked
+  // onto the lead point, a tracer mid-burst between the nose and the
+  // drone, the muzzle flash blooming, and her own hull bar reading
+  // 76 under the dials. The fx carry pinned ages so the frozen frame
+  // holds the burst forever, byte for byte.
+  pp.hp = 76;
+  if (dr) {
+    pp.lock.target = dr; pp.lock.locked = true; pp.lock.tIn = 1; pp.lock.held = 2;
+    const f0 = flightCtx.flight;
+    const nose = [f0.x, f0.alt + 1.2, -(f0.dist + 3.4)];
+    flightCtx.tracers = [{ a: nose, b: [dr.x, dr.altM, -dr.dist], age: 0.03, enemy: false }];
+    flightCtx.flashes = [{ p: nose, age: 0.02 }];
+    flightCtx.sparks = [{ x: dr.x, altM: dr.altM, dist: dr.dist, age: 0.05 }];
+  }
   frame.throttle = 0.8; rawFrame.throttle = 0.8;
   propSpin = 2.4;
   flightCtx.frozen = true;
@@ -2134,6 +2463,28 @@ window.__senja = {
   // timed sortie's clock out without waiting three real minutes.
   startMode,
   stagePatrol,
+  // Stage a bandit for the fight tests (v15.2): an escort placed on
+  // her tail or in her gunsight, optionally pre-hurt so a kill fits
+  // inside a test's patience. aheadM > 0 puts it in the lock cone
+  // ahead of her; negative, on her six where its guns live.
+  stageBandit(aheadM, hp) {
+    const m = flightCtx && flightCtx.mode; if (!m || m.kind !== 'patrol') return false;
+    const p = m.patrol, f = flightCtx.flight;
+    let esc = p.escorts.find(e => e.alive);
+    if (!esc) esc = spawnEscort(m, p, p.escorts.length, aheadM != null && aheadM < 0 ? -aheadM : 650);
+    const ef = esc.flight; if (!ef) return false;
+    if (aheadM != null) ef.dist = f.dist + aheadM;
+    ef.alt = f.alt; ef.x = f.x; ef.speed = Math.max(24, f.speed - 4);
+    esc.dist = ef.dist; esc.x = ef.x; esc.altM = ef.alt;
+    if (hp != null) esc.hp = hp;
+    esc.burstCd = 0.8;
+    return true;
+  },
+  setPatrolHp(v) {
+    const m = flightCtx && flightCtx.mode; if (!m || !m.patrol) return false;
+    m.patrol.hp = clamp(v, 0, 100);
+    return true;
+  },
   get modeState() {
     const m = flightCtx && flightCtx.mode;
     if (!m) return null;
@@ -2148,6 +2499,25 @@ window.__senja = {
       // The marker as the player sees it: where it sits, what it says.
       const dm = document.getElementById('dmark');
       out.patrol.marker = dm ? { shown: dm.style.display !== 'none', text: (dm.querySelector('.dm-lab') || {}).textContent || '' } : null;
+      // The fight's state (v15.2): her hull, the lock the sight holds
+      // (with the target's own deltas, so a test pilot can fly the
+      // lock the way a player does — by the bracket), the bandits.
+      const pp = m.patrol, ff = flightCtx.flight;
+      out.patrol.hp = Math.round(pp.hp * 10) / 10;
+      out.patrol.banditsDown = pp.banditsDown;
+      const lk = pp.lock, lt = lk.target;
+      out.patrol.lock = lt ? {
+        locked: !!lk.locked, kind: lt.kind, hp: lt.hp,
+        dx: Math.round((lt.x - ff.x) * 10) / 10, dz: Math.round(lt.dist - ff.dist),
+        dAlt: Math.round((lt.altM - ff.alt) * 10) / 10,
+        range: Math.round(Math.hypot(lt.x - ff.x, lt.dist - ff.dist, lt.altM - ff.alt)),
+      } : null;
+      out.patrol.escorts = pp.escorts.filter(e => e.alive).map(e => ({
+        hp: e.hp, phase: e.phase, rel: Math.round(e.flight ? e.flight.dist - ff.dist : 0),
+        dx: Math.round((e.x - ff.x) * 10) / 10, dAlt: Math.round((e.altM - ff.alt) * 10) / 10,
+      }));
+      const lb = document.getElementById('lockbox');
+      out.patrol.bracket = lb ? { shown: lb.style.display !== 'none', locked: lb.classList.contains('locked'), text: (lb.querySelector('.lk-lab') || {}).textContent || '' } : null;
     }
     if (m.rush) out.rush = { score: m.rush.score, combo: m.rush.combo, threaded: m.rush.threaded, bestStreak: m.rush.bestStreak, left: m.rush.left };
     if (m.race) out.race = { position: m.race.position || racePosition(flightCtx.flight, m.race.rivals.map(r => r.flight)), rivals: m.race.rivals.map(r => ({ dist: r.flight ? r.flight.dist : 0, done: r.flight ? r.flight.done : false, outcome: r.flight ? r.flight.outcome : null })) };

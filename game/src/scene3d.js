@@ -1049,6 +1049,44 @@ export function buildExplosion(R) {
   return { core: R.makeMesh(core), smoke: R.makeMesh(smoke), debris: R.makeMesh(debris) };
 }
 
+// Gunfire light (v15.2, SKY PATROL): a tracer is a unit cube the scene
+// stretches along the shot's line with a hand-built basis (the engine's
+// compose only scales uniformly) — one mesh per side of the fight, the
+// colour baked in: hers burn warm amber, the bandits' burn red. The
+// muzzle flash is a small crossed star of hot boxes, drawn at the nose
+// for a few frames per shot and scaled up as it dies.
+export function buildTracer(R, colour) {
+  const b = new Builder();
+  b.box(0, 0, 0, 1, 1, 1, colour);
+  return R.makeMesh(b);
+}
+export function buildFlash(R) {
+  const b = new Builder();
+  const HOT = [3.9, 3.1, 1.5], CORE = [4.2, 3.9, 3.0];
+  b.box(0, 0, 0, 1.9, 0.16, 0.16, HOT);
+  b.box(0, 0, 0, 0.16, 1.9, 0.16, HOT);
+  b.box(0, 0, -0.3, 0.5, 0.5, 1.1, CORE);
+  return R.makeMesh(b);
+}
+
+// A beam's model matrix: the unit cube laid along the segment a→b,
+// `thick` across and |b−a| long, centred on the segment's midpoint.
+export function beamM(a, b, thick) {
+  const d = sub3(b, a);
+  const len = Math.hypot(d[0], d[1], d[2]) || 1;
+  const z = [d[0] / len, d[1] / len, d[2] / len];
+  let x = cross3([0, 1, 0], z);
+  const xl = Math.hypot(x[0], x[1], x[2]);
+  x = xl < 1e-4 ? [1, 0, 0] : [x[0] / xl, x[1] / xl, x[2] / xl];
+  const y = cross3(z, x);
+  return new Float32Array([
+    x[0] * thick, x[1] * thick, x[2] * thick, 0,
+    y[0] * thick, y[1] * thick, y[2] * thick, 0,
+    z[0] * len, z[1] * len, z[2] * len, 0,
+    (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, 1,
+  ]);
+}
+
 // ---- small living-world props (v13), drawn dynamic by the scene ----
 // A bird: two wing quads and a body sliver — a suggestion at distance,
 // flapped by rolling the whole mesh as it circles its thermal.
@@ -1851,6 +1889,20 @@ export function createScene(R, assets) {
         R.draw(assets.shadow, M4.compose(rv.x, 0.15, -rv.dist, 0, 0, 0, 1 + rv.alt * 0.02), clamp(0.40 - rv.alt * 0.0018, 0.26, 0.40));
       }
     }
+    // The bandits (v15.2, SKY PATROL): smuggler escort planes flown
+    // against her — drawn exactly as the race rivals are, real
+    // airframes in liveries she never wears, props spinning.
+    if (st.bandits) {
+      for (const rv of st.bandits) {
+        if (!rv.mesh) continue;
+        const m = M4.compose(rv.x, rv.alt + 0.62, -rv.dist, rv.pitchVis * 0.38, -rv.bank * 0.22, -rv.bank * 0.55, rv.mesh.scale);
+        R.draw(rv.mesh.set.plane, m);
+        const pm = M4.mul(m, M4.compose(0, 1.00, -3.42, 0, 0, rv.propSpin || 0));
+        R.draw(rv.mesh.set.prop, pm);
+        R.draw(rv.mesh.set.disc, pm, 0.10 + 0.20 * (rv.throttle || 0));
+        R.draw(assets.shadow, M4.compose(rv.x, 0.15, -rv.dist, 0, 0, 0, 1 + rv.alt * 0.02), clamp(0.40 - rv.alt * 0.0018, 0.26, 0.40));
+      }
+    }
     // The patrol's quarry (v15, SKY PATROL): smuggler drones weaving and
     // running ahead of the nose. The body banks with its weave; the
     // rotor discs spin at a blur and catch what light there is, so a
@@ -1873,6 +1925,37 @@ export function createScene(R, assets) {
           const lit = ph < 0.07 || (ph >= 0.18 && ph < 0.25);
           R.draw(assets.drone.strobe, m, lit ? 1 : 0.05);
         }
+      }
+    }
+    // Gunfire light (v15.2): tracer beams live for a tenth of a
+    // second — long enough for the eye to catch the line of a burst,
+    // hers and theirs alike — muzzle flashes bloom and die at the
+    // nose that fired, hits throw a short spark burst, and a hurt
+    // patrol trails smoke off her own wing.
+    if (st.tracers) {
+      for (const tr of st.tracers) {
+        if (tr.age > 0.11) continue;
+        const mesh = tr.enemy ? assets.tracerEnemy : assets.tracerOwn;
+        if (mesh) R.draw(mesh, beamM(tr.a, tr.b, 0.16), clamp(0.95 * (1 - tr.age / 0.11), 0, 0.95));
+      }
+    }
+    if (st.flashes && assets.flash) {
+      for (const fl of st.flashes) {
+        if (fl.age > 0.09) continue;
+        R.draw(assets.flash, M4.compose(fl.p[0], fl.p[1], fl.p[2], 0, 0, st.time * 9 + fl.p[0], 0.55 + fl.age * 5), clamp(1 - fl.age / 0.09, 0, 1));
+      }
+    }
+    if (st.sparks && assets.boom) {
+      for (const sp of st.sparks) {
+        if (sp.age > 0.3) continue;
+        R.draw(assets.boom.core, M4.compose(sp.x, sp.altM + 0.3, -sp.dist, 0, st.time * 2.1, 0, 0.14 + sp.age * 0.5), clamp(0.9 * (1 - sp.age / 0.3), 0, 0.9));
+      }
+    }
+    if (st.smokes && assets.boom) {
+      for (const sm of st.smokes) {
+        if (sm.age > 1.6) continue;
+        const a = clamp(0.34 * (1 - sm.age / 1.6), 0, 0.34) * (sm.heavy ? 1.5 : 1);
+        R.draw(assets.boom.smoke, M4.compose(sm.x, sm.altM + 0.4 + sm.age * 0.8, -sm.dist, 0, sm.age * 0.7, 0, (0.16 + sm.age * 0.22) * (sm.heavy ? 1.5 : 1)), a);
       }
     }
     // The cockpit interior (v11): in cockpit mode, during a flight (the

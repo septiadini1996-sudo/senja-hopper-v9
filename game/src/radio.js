@@ -41,6 +41,13 @@ export function radioPoll(r, f, ctx) {
   // mode's ledger rides in ctx (downed, wave) so this stays pure.
   if (ctx.mode === 'patrol') {
     if (f.airborne && f.alt > 14) say('patrol_start', 'tower');
+    // v15.2: the fight talks back — a bandit warning the moment the
+    // first escort shows, a break call while she is taking fire, the
+    // hull warning under a third, and the cheer when a bandit falls.
+    if (ctx.bandit) say('patrol_bandit', 'tower');
+    if (ctx.underFire) say('patrol_fire', 'tower');
+    if (ctx.hullCrit) say('patrol_hull', 'tower');
+    if ((ctx.banditsDown || 0) >= 1) say('patrol_banditdown', 'tower');
     if ((ctx.downed || 0) >= 1) say('patrol_hit', 'tower');
     if ((ctx.wave || 0) >= 2) say('patrol_wave', 'tower');
     if ((ctx.wave || 0) >= 4) say('patrol_wave2', 'tower');
