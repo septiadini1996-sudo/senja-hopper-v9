@@ -9,7 +9,7 @@
 // stay in view above it — the panel frames the world, it never covers it.
 import { clamp, FT, KT } from './util.js';
 
-export const PANEL = { w: 3.3, top: -0.58, bottom: -1.86, z: -2.77 };
+export const PANEL = { w: 3.3, top: -0.66, bottom: -1.86, z: -2.77 };
 // The four live dials, one row across the panel. frac sweeps each needle
 // over 270 degrees: down-left at 0, straight up at 0.5, down-right at 1 —
 // except the compass, whose needle simply points at the heading.

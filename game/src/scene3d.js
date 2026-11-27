@@ -171,6 +171,26 @@ export function buildPlane(R, spec) {
   }
   beam(b, [-1.18, -0.30, -1.10], [1.18, -0.30, -1.10], 0.09, METAL);
   beam(b, [-1.18, -0.30, 0.75], [1.18, -0.30, 0.75], 0.09, METAL);
+  // Detailing (v14): the small truths a real airframe carries. An
+  // aerial wire from the cabin roof to the fin top, a pitot tube under
+  // the port wing, water rudders at the float tails, exhaust staining
+  // behind the stubs, a dark walkway strip on each wing root, and
+  // panel-line seams across the wing tops so the light has something
+  // to catch on the big flat surfaces.
+  b.box(0, 2.14, 0.62, 0.05, 0.30, 0.05, METAL); // aerial mast
+  beam(b, [0, 2.28, 0.62], [0, 3.10, 3.42], 0.016, [0.10, 0.10, 0.11]); // the wire itself
+  b.box(-1.85 * SPAN, 1.30, -0.95, 0.05, 0.05, 0.55, METAL); // pitot, port wing
+  for (const sx of [-1.18, 1.18]) {
+    b.box(sx, -0.52, 2.62, 0.30, 0.34, 0.07, RED); // water rudder
+    b.box(sx * 0.44, 0.62, -2.30, 0.30, 0.20, 0.55, [0.30, 0.26, 0.22]); // exhaust stain
+    b.box(sx * 1.05, 1.615, -0.32, 1.05, 0.025, 1.30, [0.36, 0.32, 0.28]); // wing-root walkway
+  }
+  // Panel-line seams, chordwise at two span stations a side, laid at
+  // each wing section's own top height so they sit flush on the skin.
+  for (const sx of [-1, 1]) {
+    b.box(sx * 1.6 * SPAN, 1.66, -0.30, 0.045, 0.018, 1.55, [0.55, 0.48, 0.38]);
+    b.box(sx * 4.1 * SPAN, 1.762, -0.46, 0.045, 0.018, 1.15, [0.55, 0.48, 0.38]);
+  }
   const plane = R.makeMesh(b);
   // Propeller: tapered blades (a wide root pair and a narrower tip pair
   // on each axis), a metal backplate and a proper spinner cone, all spun
@@ -397,6 +417,45 @@ export function buildIsland(R, isl, scale = 1) {
   b.cone(rx, 0.02, rz, 4.5 * scale, 2.0 * scale, 6, ROCK);
   const [rx2, rz2] = W(scaled(1.10)[(ri + 5) % isl.shape.length]);
   b.cone(rx2, 0.02, rz2, 3.2 * scale, 1.3 * scale, 6, ROCK);
+  // Detailing (v14) on an INDEPENDENT seed stream, so everything laid
+  // out above keeps its exact place: scrub bushes thicken the two
+  // terrace rings in the island's own greens, beach umbrellas and
+  // driftwood dress the sand, a third surf rock joins the pair, and a
+  // plank jetty reaches into the shallows with a fishing boat tied up
+  // at its end — every settlement works its shore.
+  const drnd = mulberry32(isl.seed * 7 + 11);
+  const bushA = [g1[0] * 0.72, g1[1] * 0.78, g1[2] * 0.72], bushB = [g2[0] * 0.8, g2[1] * 0.85, g2[2] * 0.8];
+  for (const [ringK, ringY] of [[0.80, 0.99], [0.58, 2.07]]) {
+    const ring = scaled(ringK);
+    for (let i = 0; i < ring.length; i += 2) {
+      if (drnd() < 0.45) continue;
+      const [bx, bz] = W(ring[i]);
+      b.cone(bx, ringY, bz, (0.9 + drnd() * 0.7) * scale, (0.8 + drnd() * 0.6) * scale, 6, drnd() < 0.5 ? bushA : bushB);
+    }
+  }
+  const sandPts = scaled(0.97);
+  for (const off of [3, 9]) {
+    const [ux, uz] = W(sandPts[(start + off) % sandPts.length]);
+    b.box(ux, 0.25 + 0.55 * scale, uz, 0.09 * scale, 1.1 * scale, 0.09 * scale, [0.45, 0.38, 0.32]); // umbrella pole
+    b.cone(ux, 0.25 + 1.05 * scale, uz, 1.25 * scale, 0.5 * scale, 7, off === 3 ? [0.82, 0.30, 0.22] : [0.20, 0.55, 0.55]); // its canopy
+  }
+  const [dx, dz] = W(scaled(1.0)[(start + 6) % isl.shape.length]);
+  b.box(dx, 0.30, dz, 2.6 * scale, 0.22, 0.5 * scale, [0.55, 0.45, 0.34]); // driftwood
+  const [rx3, rz3] = W(scaled(1.16)[(ri + 11) % isl.shape.length]);
+  b.cone(rx3, 0.02, rz3, 2.2 * scale, 0.9 * scale, 6, ROCK);
+  const ji = (ri + 8) % isl.shape.length;
+  const jp = isl.shape[ji];
+  for (const [jk, jy] of [[1.0, 0.30], [1.07, 0.24], [1.14, 0.18], [1.21, 0.13]]) {
+    const [jx, jz] = W([ax + (jp[0] - ax) * jk, ay + (jp[1] - ay) * jk]);
+    b.box(jx, jy, jz, 1.5 * scale, 0.14, 1.5 * scale, [0.58, 0.47, 0.35]); // jetty platform
+  }
+  const [px2, pz2] = W([ax + (jp[0] - ax) * 1.21, ay + (jp[1] - ay) * 1.21]);
+  b.box(px2 - 0.55 * scale, -0.10, pz2, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]);
+  b.box(px2 + 0.55 * scale, -0.10, pz2, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]); // jetty posts into the water
+  const [ex, ez] = W([ax + (jp[0] - ax) * 1.30, ay + (jp[1] - ay) * 1.30]);
+  b.box(ex, 0.16, ez, 2.8 * scale, 0.5 * scale, 1.05 * scale, [0.72, 0.30, 0.20]); // the tied-up boat's hull
+  b.box(ex, 0.48, ez, 1.1 * scale, 0.35 * scale, 0.8 * scale, [0.92, 0.90, 0.86]); // its cabin
+  b.box(ex, 0.95, ez, 0.07 * scale, 1.1 * scale, 0.07 * scale, [0.45, 0.38, 0.32]); // its mast
   return R.makeMesh(b);
 }
 
@@ -831,6 +890,26 @@ export function buildAirport(R) {
     b.box(cx, 0.55, 38, 3.4, 0.9, 1.7, cc);
     b.box(cx, 1.15, 38, 1.9, 0.5, 1.55, [0.20, 0.26, 0.32]);
   }
+  // Detailing (v14): the working-airport layer. Painted apron
+  // markings — a yellow taxiway centreline down the service road and
+  // white stand lines by the terminal — light pools under the apron
+  // lamps (pale discs that stay readable after dark), tarped pallet
+  // stacks by the cargo shed, a fuel bowser at the farm, chocks and a
+  // tow bar waiting at the hangar door, plant boxes on the terminal
+  // roof, and a blinking-tip antenna mast on the tower.
+  b.box(19, 0.10, 24, 0.35, 0.02, 30, [0.95, 0.78, 0.25]); // taxiway centreline
+  for (const px of [26, 34, 42]) { b.box(px, 0.06, -16, 0.28, 0.02, 5.5, [0.92, 0.92, 0.90]); b.box(px, 0.06, -18.6, 3.4, 0.02, 0.28, [0.92, 0.92, 0.90]); } // stand T-lines
+  for (const [lx, lz] of [[16, 6], [16, 44], [44, 40]]) b.disc(lx, 0.055, lz, 3.4, 12, [0.98, 0.85, 0.55]); // lamp light pools
+  for (const [px, pz] of [[44.5, 29], [46.3, 29.4]]) {
+    b.box(px, 0.18, pz, 1.7, 0.36, 1.3, [0.55, 0.45, 0.33]); // pallet
+    b.box(px, 0.85, pz, 1.6, 1.0, 1.2, [0.32, 0.42, 0.55]); // blue tarp load
+  }
+  b.box(50, 0.72, -27, 2.6, 1.1, 1.25, [0.80, 0.78, 0.74]); // fuel bowser tank
+  b.box(49.2, 0.3, -27, 0.5, 0.6, 0.9, [0.22, 0.22, 0.24]); b.box(50.8, 0.3, -27, 0.5, 0.6, 0.9, [0.22, 0.22, 0.24]); // its wheels
+  b.box(22.6, 0.14, 8.5, 0.5, 0.28, 0.34, [0.95, 0.75, 0.20]); b.box(25.4, 0.14, 8.5, 0.5, 0.28, 0.34, [0.95, 0.75, 0.20]); // chocks
+  b.box(24, 0.10, 9.6, 0.16, 0.12, 2.2, [0.55, 0.56, 0.60]); // tow bar
+  b.box(28, 8.78, -6, 3.0, 0.85, 2.0, [0.60, 0.62, 0.65]); b.box(40, 8.78, -4, 2.2, 0.85, 1.6, [0.60, 0.62, 0.65]); // roof plant
+  b.box(46, 20.45, 8, 0.12, 1.3, 0.12, [0.40, 0.40, 0.44]); b.box(46, 21.15, 8, 0.3, 0.22, 0.3, [1.9, 0.35, 0.28]); // tower antenna + tip light
   return R.makeMesh(b);
 }
 
@@ -996,10 +1075,34 @@ export function buildJet(R) {
   for (const [gx, gz] of [[0, -8.6], [-1.15, 1.4], [1.15, 1.4]]) {
     b.box(gx, -0.05, gz, 0.5, 1.1, 1.5, [0.20, 0.20, 0.22]);
   }
+  // Detailing (v14): individual window panes along the band — small
+  // pale lights that catch the sky and break the dark strip into a
+  // cabin — a wing-root fairing, a nose-gear door, the APU exhaust at
+  // the tail cone and a darker radome tip. The cues that separate an
+  // airliner from a white tube at dossier distance.
+  for (const sx of [-1, 1]) {
+    for (let i = 0; i < 11; i++) b.box(sx * 2.06, cy + 0.95, -8.0 + i * 1.5, 0.06, 0.34, 0.52, [0.85, 0.92, 1.05]);
+    b.box(sx * 2.6, 1.05, 0.6, 3.2, 0.5, 4.2, WHITE); // wing-root fairing
+  }
+  b.box(0, 0.42, -8.6, 0.62, 0.22, 1.7, [0.88, 0.88, 0.90]); // nose gear door
+  b.box(0, cy + 1.6, 13.15, 0.4, 0.32, 0.45, [0.25, 0.24, 0.26]); // APU exhaust
+  b.box(0, cy - 0.3, -13.35, 0.52, 0.52, 0.4, [0.30, 0.30, 0.34]); // radome tip
   const plane = R.makeMesh(b);
   // No propeller: an empty mesh keeps the scene's prop draws harmless.
   const empty = R.makeMesh(new Builder());
   return { plane, prop: empty, disc: empty };
+}
+
+// The RAKSASA's fan blur for the hangar preview: a pale translucent
+// disc with two crossed blade streaks, spun per intake. Built once,
+// drawn four times; the flight scene never uses it (her fans are the
+// dark intake faces already in the airframe mesh).
+export function buildJetFanBlur(R) {
+  const b = new Builder();
+  discXY(b, 0, 0, 0, 0.62, 14, [0.78, 0.86, 0.96]);
+  b.box(0, 0, 0.012, 1.16, 0.13, 0.02, [0.45, 0.52, 0.62]);
+  b.box(0, 0, 0.012, 0.13, 1.16, 0.02, [0.45, 0.52, 0.62]);
+  return R.makeMesh(b);
 }
 // island meshes so every shore carries its settlement.
 function house(b, x, z, s, rnd, y0 = 0) {
@@ -1071,6 +1174,7 @@ export function buildCloud(R) {
   b.box(12.0, 0.3, 0.4, 4.0, 0.8, 3.0, W, CLOUD_SHADE);
   b.box(-3.4, 1.9, 1.8, 4.6, 1.5, 3.6, W, CLOUD_SHADE); // a second crown shoulder
   b.box(5.9, 2.6, 1.2, 3.8, 1.3, 3.0, W, CLOUD_SHADE);
+  b.box(-14.5, -0.5, 2.2, 3.2, 0.7, 2.4, W, CLOUD_SHADE); // a detached fragment, trailing low (v14)
   return R.makeMesh(b);
 }
 export function buildCloudC(R) {
@@ -1084,6 +1188,7 @@ export function buildCloudC(R) {
   b.box(0.5, 1.55, 0, 10, 0.9, 5.0, W, CLOUD_SHADE);
   b.box(-16.5, 0.35, -0.8, 7.5, 0.8, 5.0, W, CLOUD_SHADE);
   b.box(17.0, 0.3, 0.8, 7.0, 0.8, 4.6, W, CLOUD_SHADE);
+  b.box(3.5, -0.8, 1.5, 16, 0.6, 5.5, W, CLOUD_SHADE); // a lower shelf layer, offset in the wind (v14)
   return R.makeMesh(b);
 }
 export function buildCloudB(R) {
@@ -1099,6 +1204,7 @@ export function buildCloudB(R) {
   b.box(6.2, 0.8, 0.5, 5.2, 1.4, 4.0, W, CLOUD_SHADE);
   b.box(0.8, 1.1, -2.6, 5.0, 1.3, 3.0, W, CLOUD_SHADE);
   b.box(2.8, 2.2, 2.2, 4.2, 1.2, 2.8, W, CLOUD_SHADE);
+  b.box(9.5, 2.8, -1.5, 3.0, 1.0, 2.6, W, CLOUD_SHADE); // a satellite turret, breaking away (v14)
   return R.makeMesh(b);
 }
 
@@ -1202,7 +1308,7 @@ function tickXY(b, cx, cy, cz, r, ang, len, wid, color) {
 
 export function buildCockpit(R) {
   const FRAME = [0.16, 0.13, 0.11], PANELC = [0.09, 0.10, 0.12];
-  const FACE = [0.05, 0.06, 0.075], RIM = [0.52, 0.49, 0.44], TICK = [0.92, 0.87, 0.72];
+  const FACE = [0.05, 0.06, 0.075], RIM = [0.52, 0.49, 0.44], TICK = [1.10, 1.04, 0.86];
   const fz = PANEL.z + 0.02; // instrument faces sit a hair proud of the panel
   const fb = new Builder();
   // The panel bulkhead and its glare shield.
@@ -1221,28 +1327,28 @@ export function buildCockpit(R) {
   for (const g of GAUGES) {
     discXY(fb, g.x, g.y, fz, g.r, 24, FACE);
     ringXY(fb, g.x, g.y, fz, g.r - 0.018, g.r + 0.006, 24, RIM);
-    for (let k = 0; k <= 8; k++) tickXY(fb, g.x, g.y, fz + 0.002, g.r * 0.72, (0.75 - 1.5 * (k / 8)) * Math.PI, g.r * 0.20, 0.008, TICK);
+    for (let k = 0; k <= 8; k++) { const major = k % 4 === 0; tickXY(fb, g.x, g.y, fz + 0.002, g.r * (major ? 0.66 : 0.74), (0.75 - 1.5 * (k / 8)) * Math.PI, g.r * (major ? 0.30 : 0.19), major ? 0.013 : 0.008, TICK); }
     discXY(fb, g.x, g.y, fz + 0.004, 0.028, 12, RIM);
   }
   // The radar scope: a dark green face, a glowing rim and range ring,
   // cross hairs, and the own-ship wedge at its heart. Blips are separate.
   discXY(fb, RADAR.x, RADAR.y, RADAR.z, RADAR.r, 28, [0.08, 0.22, 0.13]);
   ringXY(fb, RADAR.x, RADAR.y, RADAR.z, RADAR.r - 0.016, RADAR.r + 0.004, 28, [0.35, 1.15, 0.55]);
-  ringXY(fb, RADAR.x, RADAR.y, RADAR.z, RADAR.r * 0.52 - 0.006, RADAR.r * 0.52 + 0.006, 28, [0.20, 0.60, 0.32]);
-  fb.quad([RADAR.x - RADAR.r, RADAR.y - 0.004, RADAR.z + 0.002], [RADAR.x + RADAR.r, RADAR.y - 0.004, RADAR.z + 0.002], [RADAR.x + RADAR.r, RADAR.y + 0.004, RADAR.z + 0.002], [RADAR.x - RADAR.r, RADAR.y + 0.004, RADAR.z + 0.002], [0.20, 0.60, 0.32]);
-  fb.quad([RADAR.x - 0.004, RADAR.y - RADAR.r, RADAR.z + 0.002], [RADAR.x + 0.004, RADAR.y - RADAR.r, RADAR.z + 0.002], [RADAR.x + 0.004, RADAR.y + RADAR.r, RADAR.z + 0.002], [RADAR.x - 0.004, RADAR.y + RADAR.r, RADAR.z + 0.002], [0.20, 0.60, 0.32]);
+  ringXY(fb, RADAR.x, RADAR.y, RADAR.z, RADAR.r * 0.52 - 0.006, RADAR.r * 0.52 + 0.006, 28, [0.32, 0.98, 0.50]);
+  fb.quad([RADAR.x - RADAR.r, RADAR.y - 0.004, RADAR.z + 0.002], [RADAR.x + RADAR.r, RADAR.y - 0.004, RADAR.z + 0.002], [RADAR.x + RADAR.r, RADAR.y + 0.004, RADAR.z + 0.002], [RADAR.x - RADAR.r, RADAR.y + 0.004, RADAR.z + 0.002], [0.32, 0.98, 0.50]);
+  fb.quad([RADAR.x - 0.004, RADAR.y - RADAR.r, RADAR.z + 0.002], [RADAR.x + 0.004, RADAR.y - RADAR.r, RADAR.z + 0.002], [RADAR.x + 0.004, RADAR.y + RADAR.r, RADAR.z + 0.002], [RADAR.x - 0.004, RADAR.y + RADAR.r, RADAR.z + 0.002], [0.32, 0.98, 0.50]);
   fb.tri([RADAR.x, RADAR.y + 0.055, RADAR.z + 0.004], [RADAR.x + 0.042, RADAR.y - 0.038, RADAR.z + 0.004], [RADAR.x - 0.042, RADAR.y - 0.038, RADAR.z + 0.004], [1.45, 1.28, 0.95]);
   fb.box(RADAR.x, RADAR.y + RADAR.r + 0.035, RADAR.z, 0.05, 0.05, 0.02, [1.45, 1.28, 0.95]); // the N tick
   const frame = R.makeMesh(fb);
   // One needle, built pointing up from its hub: the scene rotates it per
   // gauge per frame from cockpit.js readings.
   const nb = new Builder();
-  nb.box(0, 0.105, 0, 0.034, 0.25, 0.018, [1.35, 1.25, 1.00]);
+  nb.box(0, 0.105, 0, 0.046, 0.25, 0.018, [1.55, 1.42, 1.08]);
   nb.box(0, -0.045, 0, 0.05, 0.07, 0.018, [0.90, 0.30, 0.20]);
   const needle = R.makeMesh(nb);
   // Scope blips: the destination in warm cream, the next ring in gold.
-  const bd = new Builder(); discXY(bd, 0, 0, 0, 0.042, 12, [1.50, 1.35, 1.05]);
-  const br = new Builder(); discXY(br, 0, 0, 0, 0.050, 12, [2.20, 1.70, 0.50]);
+  const bd = new Builder(); discXY(bd, 0, 0, 0, 0.052, 12, [1.50, 1.35, 1.05]); ringXY(bd, 0, 0, 0, 0.064, 0.078, 14, [0.85, 0.74, 0.52]);
+  const br = new Builder(); discXY(br, 0, 0, 0, 0.060, 12, [2.20, 1.70, 0.50]);
   // The canopy glass: tinted panes from the layout, plus one brighter
   // reflection streak laid diagonally across the front pane.
   const gb = new Builder();
@@ -1250,6 +1356,10 @@ export function buildCockpit(R) {
   const glass = R.makeMesh(gb);
   const sb = new Builder();
   sb.quad([0.30, 1.30, -2.83], [0.88, 1.30, -2.83], [0.12, -0.46, -2.83], [-0.42, -0.46, -2.83], [1.15, 1.20, 1.25]);
+  // A second, thinner streak low on the front pane and a short one on
+  // the left pane: real canopy glass never reflects in just one place.
+  sb.quad([-0.62, 0.28, -2.83], [-0.10, 0.28, -2.83], [-0.30, -0.10, -2.83], [-0.80, -0.10, -2.83], [1.05, 1.10, 1.16]);
+  sb.quad([-2.44, 0.55, -1.50], [-1.95, 0.72, -2.35], [-1.80, 0.10, -2.45], [-2.30, -0.05, -1.55], [1.05, 1.10, 1.16]);
   const streak = R.makeMesh(sb);
   return { frame, needle, blipDest: R.makeMesh(bd), blipRing: R.makeMesh(br), glass, streak };
 }
@@ -1270,7 +1380,7 @@ function drawCockpit(R, ck, st, proj) {
   R.draw(ck.blipDest, M4.compose(RADAR.x + bl.dest.nx * RADAR.r, RADAR.y + bl.dest.ny * RADAR.r, RADAR.z + 0.010, 0, 0, 0));
   if (bl.ring) R.draw(ck.blipRing, M4.compose(RADAR.x + bl.ring.nx * RADAR.r, RADAR.y + bl.ring.ny * RADAR.r, RADAR.z + 0.012, 0, 0, 0));
   R.draw(ck.glass, M4.ident(), 0.16);
-  R.draw(ck.streak, M4.ident(), 0.10);
+  R.draw(ck.streak, M4.ident(), 0.13);
 }
 
 // The scene keeps a spring-smoothed chase camera so the plane eases through
@@ -1302,7 +1412,7 @@ export function createScene(R, assets) {
       // Over the nose: the camera sits in the pilot's seat — no spring lag,
       // the world answers the controls directly. The seat is the
       // airframe's own (v13): the flagship's deck sits far forward.
-      eye = [st.x, st.alt + (st.seatY ?? 2.35), pz + (st.seatZ ?? -0.4)];
+      eye = [st.x, st.alt + (st.seatY ?? 2.52), pz + (st.seatZ ?? -0.4)];
       target = [st.x - st.bank * 3, st.alt + 1.15 + st.pitchVis * 6, pz - 40];
       cam.x = st.x * 0.84; cam.alt = st.alt + 5.4; // keep the chase spring warm
       if (lookYaw || lookPitch) {

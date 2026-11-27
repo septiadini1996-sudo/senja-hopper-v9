@@ -5,7 +5,7 @@
 // schemes mid-flight changes only who is holding the controls — never
 // the flight itself.
 import { createRenderer, M4 } from './engine3d.js';
-import { buildPlane, buildJet, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, cloudField, createScene } from './scene3d.js';
+import { buildPlane, buildJet, buildJetFanBlur, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, cloudField, createScene } from './scene3d.js';
 import { cockpitState } from './cockpit.js';
 import { createFlight, stepFlight, settleFlight, guidance, objectiveState, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
@@ -16,6 +16,8 @@ import { createLook, lookDrag, lookRelease, lookSet, updateLook } from './look.j
 import { makeT } from './i18n.js';
 import { createAudio } from './audio.js';
 import { createRadio, radioPoll } from './radio.js';
+import { minimapRoute, minimapPlane } from './minimap.js';
+import { createPreviewState, previewSelect, previewPose } from './preview.js';
 import { makeFrame, keyboardFrame, stickFrame, sliderValue, touchFrame, gyroFrame, gyroButtons, conditionFrame } from './input-core.js';
 import { pilotFrame } from './demo-pilot.js';
 import { clamp, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
@@ -198,25 +200,37 @@ function renderBoard() {
     if (activeIcon) card.append(activeIcon.cloneNode());
     const row = el('div', 'row');
     row.append(el('span', 'route', `${ISLANDS[tk.from].name} → ${ISLANDS[tk.to].name}`),
-      el('span', 'tag' + (tk.main ? '' : ' side'), tk.main ? t('ticket_main') : t('ticket_side')),
-      typeIcon(tk.type || 'cargo'), el('span', 'tag side', t('type_' + (tk.type || 'cargo'))));
+      el('span', 'tag' + (tk.main ? '' : ' side'), tk.main ? t('ticket_main') : t('ticket_side')));
+    card.append(row);
+    // The job at a glance (v14): the mission type wears a badge, the
+    // pay is a gold pill, the objective sits in its own tinted box,
+    // and the destination's stamp state is a chip — the four things
+    // the owner reads before she commits to a departure.
+    const typerow = el('div', 'row');
+    const badge = el('span', 'typebadge'); badge.append(typeIcon(tk.type || 'cargo'));
+    typerow.append(badge, el('span', 'tag side', t('type_' + (tk.type || 'cargo'))));
+    card.append(typerow);
     const cargo = save.settings.lang === 'id' ? tk.cargoId : tk.cargo;
-    const meta = el('p', 'meta', `${tk.customer} — ${t('cargo')}: ${cargo}\n${t('distance')}: ${(tk.dist / 1000).toFixed(1)} km · ${t('pay')}: ${fmtRp(tk.pay)} · ${tk.rings.length} ${t('rings_avail')}\n${t('departs')}: ${fmtGameHour(tk.depHour)} · ${wxIcon(tk.weather)} ${t('wx_' + tk.weather)}`);
+    const meta = el('p', 'meta', `${tk.customer} — ${t('cargo')}: ${cargo}\n${t('distance')}: ${(tk.dist / 1000).toFixed(1)} km · ${tk.rings.length} ${t('rings_avail')}\n${t('departs')}: ${fmtGameHour(tk.depHour)} · ${wxIcon(tk.weather)} ${t('wx_' + tk.weather)}`);
     meta.style.whiteSpace = 'pre-line';
-    card.append(row, meta);
-    // The objective, in words, BEFORE departure (v12): every ticket says
-    // what kind of work it is and what doing it well looks like.
+    card.append(meta);
     const objKey = 'objb_' + (tk.type || 'cargo');
-    card.append(el('p', 'meta objline',
+    card.append(el('p', 'meta objbox',
       t(objKey, { par: tk.par || 0, need: Math.ceil(tk.rings.length * 0.6) }) + ' · ' + t('weight_line', { n: tk.weight || 1 })));
+    const foot = el('div', 'row ticketfoot');
+    foot.append(el('span', 'paypill', fmtRp(tk.pay)));
+    const destHasStamp = save.stamps.includes(ISLANDS[tk.to].id);
+    if (destHasStamp) foot.append(el('span', 'stampchip have', t('stamp_have')));
+    else if (tk.main && tk.to === save.islandIdx + 1) foot.append(el('span', 'stampchip next', t('map_next')));
     const tooHeavy = (tk.weight || 1) > activeCap;
     const fly = btn(t('fly'), 'primary small', 'fly' + i, () => startFlight(tk));
-    fly.style.alignSelf = 'flex-end';
+    foot.append(fly);
+    card.append(foot);
     if (tooHeavy) {
       fly.disabled = true;
       card.append(el('p', 'meta', t('needs_capacity', { n: tk.weight })));
     }
-    card.append(fly); s.append(card);
+    s.append(card);
   }
   s.append(btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }),
     btn(t('map'), 'small', 'board-map', () => openMap('board')));
@@ -322,6 +336,9 @@ function drawMapChart(cv) {
 function renderHangar() {
   const s = $('#scr-hangar'); s.innerHTML = '';
   s.append(chipsRow(), el('h2', 'ptitle', t('hangar_title')));
+  // The living preview (v14): the selected airframe turning above the
+  // fleet cards. Tapping a card (not its buttons) brings that plane up.
+  s.append(hangarPreviewPanel());
   // The fleet (v12): every airframe, owned or for sale. Switching is
   // free; buying is forever; the board's heavy work is why they exist.
   s.append(el('h3', 'ptitle', t('fleet_title')));
@@ -329,6 +346,14 @@ function renderHangar() {
     const owned = save.planes.owned.includes(p.id);
     const active = save.planes.active === p.id;
     const card = el('div', 'panel card');
+    if (pvState && pvState.selectedId === p.id) card.classList.add('sel');
+    card.addEventListener('click', (ev) => {
+      if (ev.target.closest('button')) return;
+      if (!pvState) pvState = createPreviewState(save.planes.active);
+      previewSelect(pvState, p.id);
+      s.querySelectorAll('.card.sel').forEach(n => n.classList.remove('sel'));
+      card.classList.add('sel');
+    });
     // Her portrait (v13): the airframe's own rendered mesh, in livery.
     const icon = planeIconImg(p.id, 'planeicon');
     if (icon) card.append(icon);
@@ -417,6 +442,57 @@ function planeIcons() {
     }
   } catch { iconCache = {}; }
   return iconCache;
+}
+
+// Hangar preview (v14): the selected airframe ALIVE above the fleet
+// cards — her own mesh on a slow turntable, propeller turning; the
+// flagship wears fan blur at her four intakes instead. One renderer,
+// meshes cached per airframe, and a rAF loop that lives only while
+// the hangar is on screen. At dossier capture the pose is pinned
+// (previewPose under IS_SHOT), so the hangar frame stays byte-stable.
+let pvState = null, pvR = null, pvMeshes = {}, pvRaf = 0;
+function hangarPreviewPanel() {
+  const card = el('div', 'panel card pvcard');
+  const cv = document.createElement('canvas'); cv.id = 'pvcanvas';
+  cv.width = 660; cv.height = 300; cv.style.width = '100%'; cv.style.display = 'block';
+  card.append(cv);
+  if (!pvState) pvState = createPreviewState(save.planes.active);
+  requestAnimationFrame(pvTick);
+  return card;
+}
+function pvTick() {
+  cancelAnimationFrame(pvRaf);
+  if (screen !== 'hangar') return;
+  const cv = $('#pvcanvas'); if (!cv) return;
+  try {
+    if (!pvR) { pvR = createRenderer(cv); if (pvR) pvR.setEnv({ ...skyAt(1, 18.25), fog: [0.10, 0.06, 0.09], fogD: 0.0001 }); }
+    if (pvR && pvState) {
+      const pose = previewPose(pvState, ambient, IS_SHOT);
+      const spec = planeById(pose.planeId);
+      if (!pvMeshes[pose.planeId]) {
+        pvMeshes[pose.planeId] = spec.jet
+          ? { ...buildJet(pvR), fan: buildJetFanBlur(pvR) }
+          : buildPlane(pvR, spec);
+      }
+      const m = pvMeshes[pose.planeId];
+      const d = spec.jet ? 36 : 12.5, hh = spec.jet ? 3.2 : 1.5;
+      const eye = [-d, hh + 3.6, -d * 0.30];
+      pvR.begin();
+      pvR.setCamera(M4.lookAt(eye, [0, hh * 0.72, 0], [0, 1, 0]), M4.persp(0.60, cv.width / cv.height, 0.5, 400), eye);
+      const planeM = M4.compose(0, 0, 0, 0, pose.yaw, 0, spec.jet ? 1 : spec.scale);
+      pvR.draw(m.plane, planeM);
+      if (spec.jet) {
+        for (const [fx, fz] of [[3.8, -1.42], [7.6, 0.18], [-3.8, -1.42], [-7.6, 0.18]]) {
+          pvR.draw(m.fan, M4.mul(planeM, M4.compose(fx, 0.5, fz, 0, 0, pose.yaw * 7 + fx, 1)), 0.25 + pose.glow * 0.45);
+        }
+      } else {
+        const propM = M4.mul(planeM, M4.compose(0, 1.00, -3.42, 0, 0, pose.prop));
+        pvR.draw(m.prop, propM);
+        pvR.draw(m.disc, propM, 0.16 + pose.glow * 0.10);
+      }
+    }
+  } catch { /* a preview must never break the hangar */ }
+  pvRaf = requestAnimationFrame(pvTick);
 }
 function planeIconImg(id, cls) {
   const src = planeIcons()[id];
@@ -646,9 +722,14 @@ function buildHud() {
   const warn = el('div'); warn.id = 'warn';
   const radar = document.createElement('canvas'); radar.id = 'radar';
   radar.width = 116; radar.height = 116;
+  // The route box (v14): a compact chart of this leg under the radar —
+  // both islands' real coastlines, the route line, and the plane's
+  // live mark travelling it. Flight UI only; the HUD hides off-flight.
+  const minimap = document.createElement('canvas'); minimap.id = 'minimap';
+  minimap.width = 148; minimap.height = 104;
   const veil = el('div'); veil.id = 'cloudveil';
   const rain = document.createElement('canvas'); rain.id = 'rain';
-  hud.append(top, gauges, ribbon, guide, radioStrip, lookChip, warn, radar, veil, rain);
+  hud.append(top, gauges, ribbon, guide, radioStrip, lookChip, warn, radar, minimap, veil, rain);
   ui.append(hud);
   // Touch pad (TOUCH scheme)
   const pad = el('div', 'fctl'); pad.id = 'pad';
@@ -782,6 +863,7 @@ function startFlight(ticket) {
   paused = false; warned = false; stallWarned = false;
   $('#pause').classList.remove('on');
   radio = createRadio(); radioQueue = []; radioLog = []; radioNowKey = null; radioBusyUntil = 0;
+  audio.radioStop(); // no voice carries over from the last flight (v14)
   // The destination island is THIS ticket's island (v13): its real
   // shape, rebuilt per flight from the world table.
   if (R && assets) assets.isleDest = buildIsland(R, ISLANDS[ticket.to], 1);
@@ -822,12 +904,13 @@ function quitFlight() {
   // Quitting never settles the flight, so cash, stamps and the day stand.
   $('#pause').classList.remove('on');
   paused = false; flightCtx = null;
-  audio.engineStop(); audio.windStop(); audio.rainStop();
+  audio.engineStop(); audio.windStop(); audio.rainStop(); audio.radioStop();
   renderTitle(); show('title');
 }
 function setPaused(on) {
   if (!flightCtx || flightCtx.finished) return;
   paused = on;
+  if (on) audio.radioStop(); // a paused tower says nothing (v14)
   $('#pause').classList.toggle('on', on);
 }
 function renderReceipt() {
@@ -959,6 +1042,7 @@ function updateHud() {
   $('#warn').textContent = t('warn_fast');
   const tv = $('#thrval'); if (tv) tv.textContent = 'THR ' + Math.round(frame.throttle * 100) + '%';
   drawGauges(f);
+  drawMinimap(f);
 }
 // Radar: north-up scope. The plane sits at the centre; the next ring is a
 // gold dot, the destination a cream marker at the top bearing, both placed
@@ -1042,6 +1126,51 @@ function drawGauges(f) {
   dial(248, (f.vs + 8) / 16, (vsFpm > 0 ? '+' : '') + vsFpm, 'FT/MIN', 'VS');
 }
 
+// The route box (v14): the leg at a glance. Both islands are drawn
+// from the same outline tables as the big chart, the route is a dashed
+// gold line between them, and the plane's wedge rides it by her true
+// along-track fraction and lateral offset, leaning with her bank. The
+// route data is cached per ticket so the per-frame cost is one canvas
+// pass over ~40 points.
+let mmRoute = null, mmKey = '';
+function drawMinimap(f) {
+  const c = $('#minimap'); if (!c || !flightCtx) return;
+  const tk = flightCtx.ticket;
+  const key = tk.from + '>' + tk.to;
+  if (key !== mmKey) { mmKey = key; mmRoute = minimapRoute(tk.from, tk.to); }
+  const rt = mmRoute; if (!rt) return;
+  const g = c.getContext('2d');
+  const W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  const A = { x: 30, y: H - 24 }, B = { x: W - 30, y: 24 };
+  const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
+  const LAT = 260; // metres of lateral offset that reach the box edge
+  const p = minimapPlane(rt, f);
+  const px = A.x + ux * len * p.frac + nx * clamp(p.lateral / LAT, -1, 1) * 15;
+  const py = A.y + uy * len * p.frac + ny * clamp(p.lateral / LAT, -1, 1) * 15;
+  const R = 15;
+  const drawIsle = (o, cx, cy) => {
+    g.beginPath();
+    o.forEach((pt, j) => { const X = cx + pt.dx * R, Y = cy - pt.dy * R; j ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+    g.closePath(); g.fillStyle = '#7fae5f'; g.fill();
+    g.strokeStyle = '#d9b878'; g.lineWidth = 1.4; g.stroke();
+  };
+  g.strokeStyle = 'rgba(242, 165, 65, 0.9)'; g.lineWidth = 1.6; g.setLineDash([5, 4]);
+  g.beginPath(); g.moveTo(A.x, A.y); g.lineTo(B.x, B.y); g.stroke(); g.setLineDash([]);
+  drawIsle(rt.from.outline, A.x, A.y);
+  drawIsle(rt.to.outline, B.x, B.y);
+  g.beginPath(); g.arc(B.x, B.y, 4.5, 0, Math.PI * 2); g.strokeStyle = '#ffe9c4'; g.lineWidth = 1.6; g.stroke();
+  g.save();
+  g.translate(px, py); g.rotate(Math.atan2(uy, ux) + Math.PI / 2 - f.bank * 0.5);
+  g.beginPath(); g.moveTo(0, -7); g.lineTo(4.8, 5.4); g.lineTo(0, 2.6); g.lineTo(-4.8, 5.4); g.closePath();
+  g.fillStyle = '#f2a541'; g.fill();
+  g.restore();
+  g.fillStyle = '#f3d9b0'; g.font = '700 8.5px system-ui'; g.textAlign = 'center';
+  g.fillText(rt.from.name.toUpperCase(), A.x, H - 4);
+  g.fillText(rt.to.name.toUpperCase(), B.x, 12);
+}
+
 // ---------- input: keyboard & global keys ----------
 window.addEventListener('keydown', e => {
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
@@ -1090,6 +1219,7 @@ if (R) {
       { mesh: buildIsland(R, ISLANDS[2], 0.5), x: -170, f: 0.3, rot: 1.2, s: 0.55 },
       { mesh: buildIsland(R, ISLANDS[4], 0.5), x: 210, f: 0.55, rot: 2.6, s: 0.7 },
       { mesh: buildIsland(R, ISLANDS[1], 0.5), x: -240, f: 0.78, rot: 0.4, s: 0.5 },
+      { mesh: buildIsland(R, ISLANDS[3], 0.42), x: -820, f: 0.44, rot: 2.1, s: 0.5 }, // a far western silhouette for depth (v14)
     ],
     rings: buildRingMeshes(R),
     sea: buildSeaMesh(R),
@@ -1473,6 +1603,8 @@ window.__senja = {
   // the one currently on the strip.
   get radioLog() { return [...radioLog]; },
   get radioNow() { return radioNowKey; },
+  // The route box's data (v14): the current leg's route + plane mark.
+  get minimap() { return flightCtx ? { route: mmRoute, plane: flightCtx.flight ? minimapPlane(mmRoute, flightCtx.flight) : null } : null; },
   openMap,
   setLook(yawDeg, pitchDeg) { lookSet(look, (yawDeg || 0) * Math.PI / 180, (pitchDeg || 0) * Math.PI / 180); },
   setThrottle(v) { frame.throttle = clamp(v, 0, 1); rawFrame.throttle = frame.throttle; },

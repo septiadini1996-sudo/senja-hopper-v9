@@ -7,6 +7,12 @@
 // rain loops tied to the flight, a firmness-scaled touchdown thud, and
 // the airport radio — a band-limited formant voice that mumbles real
 // transmissions at speech rhythm under their printed text.
+//
+// v14 teaches the radio to actually speak: where the platform offers
+// speech synthesis, transmissions are spoken words (the choice and the
+// pacing live in radio.js, as pure logic); the formant voice remains as
+// the automatic fallback wherever synthesis is missing or fails.
+import { radioEngine, radioSpeechParams, estimateSpeechSeconds } from './radio.js';
 export function createAudio(getSettings) {
   let ctx = null, master = null, musicGain = null, sfxGain = null, radioGain = null;
   let engineNodes = null, windNodes = null, rainNodes = null;
@@ -24,6 +30,7 @@ export function createAudio(getSettings) {
       sfxGain = ctx.createGain(); sfxGain.connect(master);
       radioGain = ctx.createGain(); radioGain.connect(master);
       applyLevels();
+      primeSpeechVoices();
       return true;
     } catch { return false; }
   }
@@ -194,7 +201,75 @@ export function createAudio(getSettings) {
     }
   }
 
-  // ---- the airport radio (v13) ----
+  // ---- spoken radio (v14) ----
+  // The voice list loads asynchronously on most platforms (and starts
+  // empty on iOS until the first getVoices), so it is warmed at context
+  // creation and refreshed whenever the platform announces new voices.
+  let speechVoices = [];
+  function primeSpeechVoices() {
+    try {
+      const g = typeof window !== 'undefined' ? window : null;
+      if (!g || radioEngine(g) !== 'tts') return;
+      const load = () => { try { speechVoices = g.speechSynthesis.getVoices() || []; } catch { /* keep the last list */ } };
+      load();
+      if (typeof g.speechSynthesis.addEventListener === 'function') g.speechSynthesis.addEventListener('voiceschanged', load);
+    } catch { /* speech is garnish */ }
+  }
+  function pickSpeechVoice(want) {
+    if (!speechVoices.length) return null;
+    const starts = p => speechVoices.find(v => (v.lang || '').toLowerCase().startsWith(p));
+    return starts(want + '-') || starts(want) || (want === 'id' ? starts('en') : null) || null;
+  }
+  // Speak one transmission. Returns the seconds the channel stays busy,
+  // or 0 when speech failed — the caller then falls back to the formant
+  // voice, so a speechless platform sounds exactly like v13.
+  function speakRadio(text, speaker, s) {
+    try {
+      const g = typeof window !== 'undefined' ? window : null;
+      if (!g || radioEngine(g) !== 'tts') return 0;
+      const { pitch, rate } = radioSpeechParams(speaker);
+      // The channel still clicks open first: squelch and a call beep on
+      // the radio bus, as the formant voice always had.
+      if (ctx) {
+        const t0 = ctx.currentTime + 0.03;
+        noiseHit(t0, 0.05, 0.05, 2400);
+        tone(radioGain, 1250, t0 + 0.06, 0.05, 'sine', 0.05);
+      }
+      const synth = g.speechSynthesis;
+      synth.cancel(); // one voice on the channel at a time
+      const u = new g.SpeechSynthesisUtterance(String(text));
+      const id = s.lang === 'id';
+      u.lang = id ? 'id-ID' : 'en-US';
+      const v = pickSpeechVoice(id ? 'id' : 'en');
+      if (v) u.voice = v;
+      u.pitch = pitch; u.rate = rate;
+      u.volume = Math.max(0, Math.min(1, (s.radio ?? 4) / 5));
+      synth.speak(u);
+      return estimateSpeechSeconds(text, rate) + 0.3;
+    } catch { return 0; }
+  }
+  // Silence the spoken channel at once (pause, quit, a new flight): a
+  // tower left mid-sentence over the pause menu helps nobody.
+  function radioStop() {
+    try {
+      const g = typeof window !== 'undefined' ? window : null;
+      if (g && g.speechSynthesis) g.speechSynthesis.cancel();
+    } catch { /* nothing to stop */ }
+  }
+
+  // The radio's mouth, chosen per transmission (v14): real speech where
+  // the platform offers it, the v13 formant voice everywhere else. The
+  // printed strip is identical either way; only the sound changes.
+  function radioVoice(text, speaker) {
+    if (!ensure()) return 0;
+    const s = getSettings();
+    if (!s.master || (s.radio ?? 4) === 0) return 0;
+    const spoken = speakRadio(text, speaker, s);
+    if (spoken > 0) return spoken;
+    return formantVoice(text, speaker);
+  }
+
+  // ---- the airport radio, formant fallback (v13) ----
   // A transmission is a squelch click, a call beep, then a voice: a
   // sawtooth run through two formant band-passes, chopped into syllables
   // at speech rhythm with a speaker's pitch and a sentence contour, all
@@ -213,7 +288,7 @@ export function createAudio(getSettings) {
     if (out.length) out[out.length - 1].end = true;
     return out;
   }
-  function radioVoice(text, speaker) {
+  function formantVoice(text, speaker) {
     if (!ensure()) return 0;
     const s = getSettings();
     if (!s.master || (s.radio ?? 4) === 0) return 0;
@@ -260,6 +335,6 @@ export function createAudio(getSettings) {
 
   return { ensure, applyLevels, startMusic, stopMusic, jingle,
            engineStart, engineSet, engineStop, windStart, windSet, windStop,
-           rainStart, rainSet, rainStop, blip, radioVoice,
+           rainStart, rainSet, rainStop, blip, radioVoice, radioStop,
            hasContext: () => !!ctx };
 }

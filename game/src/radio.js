@@ -37,3 +37,34 @@ export function radioPoll(r, f, ctx) {
   if (f.done && f.outcome === 'splash') say('crashcall', 'tower');
   return out;
 }
+
+// ---- the voice itself (v14) ----
+// The v13 formant voice was honestly a mumble: it carried the radio's
+// rhythm, never its words. Where the platform offers real speech
+// synthesis, the tower now SPEAKS — the choice is made here, as pure
+// logic over a global-like object, so the suite can pin both branches
+// (synthesis present → speak; absent or partial → the formant fallback
+// takes over silently, exactly as v13 sounded).
+export function radioEngine(g) {
+  const ok = !!g && typeof g.speechSynthesis === 'object' && g.speechSynthesis !== null
+    && typeof g.speechSynthesis.speak === 'function'
+    && typeof g.SpeechSynthesisUtterance === 'function';
+  return ok ? 'tts' : 'formant';
+}
+
+// The radio colour of a spoken call: pitch dipped and pace eased a
+// touch below conversational, per speaker — the tower sits lowest,
+// the pilot a shade brighter, the boat's keeper in between.
+export function radioSpeechParams(speaker) {
+  if (speaker === 'pilot') return { pitch: 0.95, rate: 0.97 };
+  if (speaker === 'boat') return { pitch: 0.88, rate: 0.94 };
+  return { pitch: 0.85, rate: 0.93 }; // tower
+}
+
+// How long a spoken transmission keeps the channel: words at a
+// measured radio pace, scaled by the rate the voice will actually use,
+// plus the squelch-and-settle margin the queue already allowed for.
+export function estimateSpeechSeconds(text, rate = 0.93) {
+  const words = String(text).split(/\s+/).filter(Boolean).length;
+  return 0.35 + (words * 0.46) / Math.max(0.5, rate);
+}

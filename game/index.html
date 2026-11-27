@@ -13,18 +13,23 @@
   .screen { position: absolute; inset: 0; display: none; flex-direction: column;
     align-items: center; padding: 18px 16px; box-sizing: border-box; overflow-y: auto; }
   .screen.on { display: flex; }
-  .panel { background: rgba(24, 14, 22, 0.86); border: 1px solid rgba(255, 190, 110, 0.35);
-    border-radius: 14px; padding: 14px 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.45); }
+  .panel { background: linear-gradient(180deg, rgba(38, 22, 30, 0.88), rgba(24, 14, 22, 0.86)); border: 1px solid rgba(255, 190, 110, 0.35);
+    border-radius: 14px; padding: 14px 16px; box-shadow: 0 10px 34px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255, 210, 140, 0.14); }
   h1.logo { font-size: 52px; letter-spacing: 3px; margin: 26px 0 2px; color: #ffd98f;
     text-shadow: 0 3px 0 #a33d1c, 0 6px 22px rgba(0,0,0,0.6); font-weight: 800; text-align: center; }
   .sub { font-size: 16px; letter-spacing: 4px; color: #ffcf9e; margin: 0 0 14px; text-transform: uppercase;
     text-shadow: 0 1px 3px rgba(90, 30, 10, 0.85), 0 0 14px rgba(90, 30, 10, 0.45); font-weight: 700; }
-  h2.ptitle { font-size: 26px; letter-spacing: 2px; margin: 4px 0 12px; color: #ffd98f;
+  h2.ptitle, h3.ptitle { font-size: 26px; letter-spacing: 2px; margin: 4px 0 12px; color: #ffd98f; text-align: center;
     text-shadow: 0 2px 16px rgba(74, 26, 0, 0.65), 0 1px 4px rgba(74, 26, 0, 0.75); }
+  h2.ptitle::after, h3.ptitle::after { content: ''; display: block; width: 56px; height: 3px; margin: 7px auto 0;
+    border-radius: 2px; background: linear-gradient(90deg, transparent, #f2a541, transparent); }
+  h3.ptitle { font-size: 20px; }
   .btn { pointer-events: auto; cursor: pointer; border: 1px solid rgba(255, 200, 120, 0.55);
     background: linear-gradient(180deg, rgba(122, 52, 26, 0.92), rgba(84, 32, 20, 0.92));
     color: #ffe9c4; font: 700 16px/1.2 inherit; letter-spacing: 1.5px;
-    padding: 12px 22px; margin: 5px; border-radius: 10px; min-width: 230px; text-align: center; }
+    padding: 12px 22px; margin: 5px; border-radius: 10px; min-width: 230px; text-align: center;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255, 220, 160, 0.18);
+    transition: filter 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease; }
   .btn:hover { filter: brightness(1.18); }
   .btn:active { transform: translateY(1px); }
   .btn.small { min-width: 0; padding: 9px 14px; font-size: 14px; }
@@ -32,12 +37,30 @@
   .btn[disabled] { opacity: 0.45; cursor: default; }
   .btn.on { outline: 2px solid #ffd98f; background: linear-gradient(180deg, #e89a3f, #c25e20); }
   .topchips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 10px; }
-  .chip { background: rgba(24, 14, 22, 0.85); border: 1px solid rgba(255, 190, 110, 0.4);
+  .chip { background: linear-gradient(180deg, rgba(38, 22, 30, 0.88), rgba(24, 14, 22, 0.85)); border: 1px solid rgba(255, 190, 110, 0.4);
     border-radius: 999px; padding: 6px 14px; font-size: 14px; letter-spacing: 1px; font-weight: 700; }
   .chip b { color: #ffd98f; }
   .objline { font-size: 15px; color: #ffe1ae; background: rgba(24,14,22,0.7); padding: 7px 16px;
     border-radius: 999px; margin-bottom: 12px; letter-spacing: 0.5px; }
-  .card { width: min(620px, 94vw); margin: 7px 0; }
+  .card { width: min(620px, 94vw); margin: 7px 0; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+  .card:hover { border-color: rgba(255, 200, 120, 0.6); }
+  .card.sel { outline: 2px solid #f2a541; outline-offset: 1px; }
+  /* Ticket furniture (v14): the mission badge, the gold pay pill, the
+     tinted objective box and the stamp chip. */
+  .typebadge { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+    border-radius: 10px; background: rgba(242, 165, 65, 0.14); border: 1px solid rgba(255, 200, 120, 0.45); }
+  .typebadge .typeicon { width: 22px; height: 22px; vertical-align: 0; }
+  .paypill { font-size: 15px; font-weight: 800; letter-spacing: 0.5px; color: #2a1608;
+    background: linear-gradient(180deg, #ffd98f, #f2a541); border-radius: 999px; padding: 5px 13px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+  .objbox { background: rgba(242, 165, 65, 0.10); border: 1px solid rgba(255, 200, 120, 0.22);
+    border-radius: 10px; padding: 8px 12px; color: #ffe1ae; }
+  .stampchip { font-size: 11px; font-weight: 800; letter-spacing: 1.2px; padding: 4px 10px; border-radius: 999px; }
+  .stampchip.have { background: rgba(46, 110, 62, 0.85); color: #d9f5df; border: 1px solid rgba(140, 230, 160, 0.5); }
+  .stampchip.next { background: rgba(180, 79, 29, 0.9); color: #ffe9c4; border: 1px solid rgba(255, 200, 120, 0.55); }
+  .ticketfoot { margin-top: 10px; }
+  .pvcard { padding: 10px; }
+  .pvcard canvas { border-radius: 10px; border: 1px solid rgba(255, 200, 120, 0.35); background: #171019; }
   .card .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
   .tag { font-size: 11px; font-weight: 800; letter-spacing: 1.5px; padding: 3px 9px; border-radius: 999px;
     background: #b44f1d; color: #ffe9c4; }
@@ -51,7 +74,8 @@
   .seg.fill { background: linear-gradient(180deg, #f2a541, #cf6a1e); }
   .seglabel { font-size: 13px; color: #f3d9b0; min-width: 34px; }
   .setrow { display: flex; justify-content: space-between; align-items: center; gap: 12px;
-    padding: 9px 2px; border-bottom: 1px solid rgba(255,190,110,0.14); flex-wrap: wrap; }
+    padding: 9px 6px; border-bottom: 1px solid rgba(255,190,110,0.14); flex-wrap: wrap; border-radius: 6px; }
+  .setrow:hover { background: rgba(255, 210, 140, 0.05); }
   .setrow:last-child { border-bottom: none; }
   .setname { font-size: 15px; font-weight: 700; letter-spacing: 1px; }
   /* ---------- flight HUD ---------- */
@@ -81,6 +105,8 @@
     color: #f3d9b0; font-weight: 700; white-space: nowrap; }
   #radar { position: absolute; left: 12px; top: 282px; border-radius: 50%;
     box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
+  #minimap { position: absolute; left: 12px; top: 406px; background: rgba(20,12,20,0.72);
+    border: 1px solid rgba(255,190,110,0.4); border-radius: 12px; }
   #cambtn { pointer-events: auto; cursor: pointer; border: 1px solid rgba(255,190,110,0.55);
     background: rgba(20,12,20,0.82); color: #ffd98f; border-radius: 9px; padding: 7px 10px;
     font: 800 11.5px inherit; letter-spacing: 0.5px; }
