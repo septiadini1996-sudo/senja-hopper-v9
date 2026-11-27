@@ -437,7 +437,10 @@ export function buildIsland(R, isl, scale = 1) {
   for (const off of [3, 9]) {
     const [ux, uz] = W(sandPts[(start + off) % sandPts.length]);
     b.box(ux, 0.25 + 0.55 * scale, uz, 0.09 * scale, 1.1 * scale, 0.09 * scale, [0.45, 0.38, 0.32]); // umbrella pole
-    b.cone(ux, 0.25 + 1.05 * scale, uz, 1.25 * scale, 0.5 * scale, 7, off === 3 ? [0.82, 0.30, 0.22] : [0.20, 0.55, 0.55]); // its canopy
+    // Canopies fully saturated and a touch wider (v15.1): two gates in
+    // a row flew the approach without spotting the shore dressing —
+    // muted cloth at 1.25 m across simply does not read from altitude.
+    b.cone(ux, 0.25 + 1.05 * scale, uz, 1.55 * scale, 0.55 * scale, 7, off === 3 ? [1.0, 0.16, 0.08] : [0.0, 0.72, 0.72]); // its canopy
   }
   const [dx, dz] = W(scaled(1.0)[(start + 6) % isl.shape.length]);
   b.box(dx, 0.30, dz, 2.6 * scale, 0.22, 0.5 * scale, [0.55, 0.45, 0.34]); // driftwood
@@ -445,15 +448,18 @@ export function buildIsland(R, isl, scale = 1) {
   b.cone(rx3, 0.02, rz3, 2.2 * scale, 0.9 * scale, 6, ROCK);
   const ji = (ri + 8) % isl.shape.length;
   const jp = isl.shape[ji];
-  for (const [jk, jy] of [[1.0, 0.30], [1.07, 0.24], [1.14, 0.18], [1.21, 0.13]]) {
+  // The jetty reaches half again as far as it did (v15.1): five
+  // platforms stepping down to 1.32 radii, the posts and the boat
+  // moved out with its end. Same shore point, same seed stream.
+  for (const [jk, jy] of [[1.0, 0.30], [1.08, 0.235], [1.16, 0.175], [1.24, 0.12], [1.32, 0.07]]) {
     const [jx, jz] = W([ax + (jp[0] - ax) * jk, ay + (jp[1] - ay) * jk]);
     b.box(jx, jy, jz, 1.5 * scale, 0.14, 1.5 * scale, [0.58, 0.47, 0.35]); // jetty platform
   }
-  const [px2, pz2] = W([ax + (jp[0] - ax) * 1.21, ay + (jp[1] - ay) * 1.21]);
+  const [px2, pz2] = W([ax + (jp[0] - ax) * 1.32, ay + (jp[1] - ay) * 1.32]);
   b.box(px2 - 0.55 * scale, -0.10, pz2, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]);
   b.box(px2 + 0.55 * scale, -0.10, pz2, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]); // jetty posts into the water
-  const [ex, ez] = W([ax + (jp[0] - ax) * 1.30, ay + (jp[1] - ay) * 1.30]);
-  b.box(ex, 0.16, ez, 2.8 * scale, 0.5 * scale, 1.05 * scale, [0.72, 0.30, 0.20]); // the tied-up boat's hull
+  const [ex, ez] = W([ax + (jp[0] - ax) * 1.41, ay + (jp[1] - ay) * 1.41]);
+  b.box(ex, 0.16, ez, 2.8 * scale, 0.5 * scale, 1.05 * scale, [0.92, 0.22, 0.12]); // the tied-up boat's hull, bright red now
   b.box(ex, 0.48, ez, 1.1 * scale, 0.35 * scale, 0.8 * scale, [0.92, 0.90, 0.86]); // its cabin
   b.box(ex, 0.95, ez, 0.07 * scale, 1.1 * scale, 0.07 * scale, [0.45, 0.38, 0.32]); // its mast
   // The approach shore (v15 gate fix): the lane meets every island on
@@ -465,24 +471,40 @@ export function buildIsland(R, isl, scale = 1) {
   // so the settlement's working edge reads on a normal approach. All
   // of it is laid from the shape alone, after every seeded item, so
   // no house, palm or rock moves.
-  let si = 0;
-  for (let i = 1; i < isl.shape.length; i++) if (isl.shape[i][1] < isl.shape[si][1]) si = i;
+  // The anchor point (v15.1 correction): the southernmost point near
+  // the centreline, not the southernmost point outright. Penida's
+  // outright southernmost point stands inside the destination
+  // airport's footprint — its jetty ran into the terminal's south
+  // wall and its boat ended up inside the terminal block, invisible
+  // on every approach ever flown at it. The near-centre south point
+  // stands clear of the apron, just past the deck's far end, in the
+  // pilot's eye line on short final. Same shore, same parts; only
+  // the anchor moved along the coast. (Islands whose southernmost
+  // point already sits near the centreline keep it.)
+  let si = -1;
+  for (let i = 0; i < isl.shape.length; i++) {
+    if (Math.abs(isl.shape[i][0] - ax) > 0.17) continue;
+    if (si < 0 || isl.shape[i][1] < isl.shape[si][1]) si = i;
+  }
+  if (si < 0) { si = 0; for (let i = 1; i < isl.shape.length; i++) if (isl.shape[i][1] < isl.shape[si][1]) si = i; }
   const sp = isl.shape[si];
-  for (const [jk, jy] of [[1.0, 0.30], [1.08, 0.23], [1.16, 0.17]]) {
+  // The south jetty reaches half again as far too (v15.1), its boat
+  // bright teal and its umbrellas saturated like the town pair.
+  for (const [jk, jy] of [[1.0, 0.30], [1.08, 0.23], [1.16, 0.17], [1.24, 0.12]]) {
     const [jx, jz] = W([ax + (sp[0] - ax) * jk, ay + (sp[1] - ay) * jk]);
     b.box(jx, jy, jz, 1.4 * scale, 0.14, 1.4 * scale, [0.58, 0.47, 0.35]); // south jetty platform
   }
-  const [qx, qz] = W([ax + (sp[0] - ax) * 1.16, ay + (sp[1] - ay) * 1.16]);
+  const [qx, qz] = W([ax + (sp[0] - ax) * 1.24, ay + (sp[1] - ay) * 1.24]);
   b.box(qx - 0.5 * scale, -0.10, qz, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]);
   b.box(qx + 0.5 * scale, -0.10, qz, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]); // its posts
-  const [tx, tz] = W([ax + (sp[0] - ax) * 1.27, ay + (sp[1] - ay) * 1.27]);
-  b.box(tx, 0.16, tz, 2.6 * scale, 0.5 * scale, 1.0 * scale, [0.16, 0.44, 0.52]); // the south boat, teal-hulled
+  const [tx, tz] = W([ax + (sp[0] - ax) * 1.33, ay + (sp[1] - ay) * 1.33]);
+  b.box(tx, 0.16, tz, 2.6 * scale, 0.5 * scale, 1.0 * scale, [0.05, 0.72, 0.78]); // the south boat, bright teal now
   b.box(tx, 0.46, tz, 1.0 * scale, 0.32 * scale, 0.75 * scale, [0.92, 0.90, 0.86]); // its cabin
   b.box(tx, 0.88, tz, 0.07 * scale, 1.0 * scale, 0.07 * scale, [0.45, 0.38, 0.32]); // its mast
   for (const off of [-1, 1]) {
     const [ux, uz] = W(sandPts[(si + off + sandPts.length) % sandPts.length]);
     b.box(ux, 0.25 + 0.55 * scale, uz, 0.09 * scale, 1.1 * scale, 0.09 * scale, [0.45, 0.38, 0.32]); // umbrella pole
-    b.cone(ux, 0.25 + 1.05 * scale, uz, 1.25 * scale, 0.5 * scale, 7, off < 0 ? [0.90, 0.62, 0.16] : [0.85, 0.40, 0.55]); // its canopy
+    b.cone(ux, 0.25 + 1.05 * scale, uz, 1.55 * scale, 0.55 * scale, 7, off < 0 ? [1.0, 0.72, 0.0] : [1.0, 0.25, 0.55]); // its canopy
   }
   return R.makeMesh(b);
 }
@@ -815,32 +837,35 @@ export function buildHomeTerrain(R) {
   // the sand beside the airport with a fishing boat tied at its end,
   // and umbrellas dress both shores at the field's latitude. Mesh
   // only: the height table the flight model reads is untouched.
-  for (const [jx, jy] of [[163, 0.30], [174, 0.24], [185, 0.18], [196, 0.13]]) {
+  // Both home jetties reach half again as far as they did, their
+  // boats bright and their umbrellas saturated (v15.1) — the same
+  // readability pass the islands got, on the field she sees most.
+  for (const [jx, jy] of [[163, 0.30], [174, 0.24], [185, 0.18], [196, 0.13], [207, 0.09], [218, 0.06]]) {
     b.box(jx, jy, -30, 11, 0.16, 3.2, [0.58, 0.47, 0.35]); // jetty deck sections
   }
-  b.box(196, -0.10, -31.8, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]);
-  b.box(196, -0.10, -28.2, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]); // jetty posts
-  b.box(206, 0.17, -30, 3.4, 0.55, 1.25, [0.16, 0.44, 0.52]); // the tied-up boat, teal hull
-  b.box(206, 0.52, -30, 1.25, 0.36, 0.9, [0.92, 0.90, 0.86]); // its cabin
-  b.box(206, 0.98, -30, 0.08, 1.15, 0.08, [0.45, 0.38, 0.32]); // its mast
-  for (const [ux, uz, col] of [[150, 18, [0.82, 0.30, 0.22]], [154, -88, [0.20, 0.55, 0.55]], [-152, -40, [0.90, 0.62, 0.16]]]) {
+  b.box(218, -0.10, -31.8, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]);
+  b.box(218, -0.10, -28.2, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]); // jetty posts
+  b.box(228, 0.17, -30, 3.4, 0.55, 1.25, [0.96, 0.95, 0.92]); // the tied-up boat, bright white hull now
+  b.box(228, 0.52, -30, 1.25, 0.36, 0.9, [0.92, 0.90, 0.86]); // its cabin
+  b.box(228, 0.98, -30, 0.08, 1.15, 0.08, [0.45, 0.38, 0.32]); // its mast
+  for (const [ux, uz, col] of [[150, 18, [1.0, 0.16, 0.08]], [154, -88, [0.0, 0.72, 0.72]], [-152, -40, [1.0, 0.72, 0.0]]]) {
     b.box(ux, 0.62, uz, 0.10, 1.15, 0.10, [0.45, 0.38, 0.32]); // umbrella pole
-    b.cone(ux, 1.32, uz, 1.35, 0.55, 7, col); // its canopy
+    b.cone(ux, 1.32, uz, 1.6, 0.55, 7, col); // its canopy
   }
   // A second, smaller jetty on the north shore, dead ahead of every
   // climb-out: the far sand ends at z ≈ −375, and she overflies this
   // harbour on each departure, so the field's working edge is in the
   // frame even for a pilot who never looks sideways.
-  for (const [jz, jy] of [[-380, 0.28], [-389, 0.22], [-398, 0.16]]) {
+  for (const [jz, jy] of [[-380, 0.28], [-389, 0.22], [-398, 0.16], [-407, 0.12], [-416, 0.08]]) {
     b.box(40, jy, jz, 3.0, 0.15, 9, [0.58, 0.47, 0.35]); // north jetty deck
   }
-  b.box(38.2, -0.10, -398, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]);
-  b.box(41.8, -0.10, -398, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]); // its posts
-  b.box(40, 0.17, -407, 1.15, 0.52, 3.1, [0.72, 0.30, 0.20]); // the north boat, red hull
-  b.box(40, 0.50, -407, 0.85, 0.34, 1.15, [0.92, 0.90, 0.86]); // its cabin
-  for (const [ux, uz, col] of [[18, -366, [0.85, 0.40, 0.55]], [66, -370, [0.90, 0.62, 0.16]]]) {
+  b.box(38.2, -0.10, -416, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]);
+  b.box(41.8, -0.10, -416, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]); // its posts
+  b.box(40, 0.17, -425, 1.15, 0.52, 3.1, [0.92, 0.22, 0.12]); // the north boat, bright red hull now
+  b.box(40, 0.50, -425, 0.85, 0.34, 1.15, [0.92, 0.90, 0.86]); // its cabin
+  for (const [ux, uz, col] of [[18, -366, [1.0, 0.25, 0.55]], [66, -370, [1.0, 0.72, 0.0]]]) {
     b.box(ux, 0.62, uz, 0.10, 1.15, 0.10, [0.45, 0.38, 0.32]);
-    b.cone(ux, 1.32, uz, 1.35, 0.55, 7, col);
+    b.cone(ux, 1.32, uz, 1.6, 0.55, 7, col);
   }
   return R.makeMesh(b);
 }
@@ -1051,7 +1076,10 @@ export function buildBeacon(R) {
 export function buildDrone(R) {
   const body = new Builder();
   const CARBON = [0.10, 0.11, 0.13], CARBON2 = [0.16, 0.17, 0.20];
-  const HAZARD = [0.95, 0.45, 0.08], EYE = [0.25, 0.75, 0.95];
+  // The hazard trim runs fully saturated now (v15.1): at hunting range
+  // the airframe is a dark speck by design, and the orange is the one
+  // thing on it that must still shout.
+  const HAZARD = [1.0, 0.36, 0.02], EYE = [0.25, 0.75, 0.95];
   // The pod: a tapered hull, a domed top shell, and a darker belly pan.
   body.box(0, 0, 0, 0.95, 0.42, 1.7, CARBON);
   body.box(0, 0.30, -0.1, 0.7, 0.22, 1.1, CARBON2);
@@ -1076,7 +1104,15 @@ export function buildDrone(R) {
   for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
     rotors.disc(sx * 1.12, 0.36, sz * 1.12, 0.62, 10, [0.55, 0.58, 0.62]);
   }
-  return { body: R.makeMesh(body), rotors: R.makeMesh(rotors) };
+  // The strobe (v15.1): a white bulb on the pod's crown and a red one
+  // under the tail, colours pushed far past 1.0 like the tower beacon.
+  // They are their own mesh because the scene blinks them by alpha —
+  // a double flash a second, the one light a smuggler cannot switch
+  // off, readable at hunting range day and night.
+  const strobe = new Builder();
+  strobe.box(0, 0.52, -0.1, 0.34, 0.30, 0.34, [3.4, 3.4, 3.2]);
+  strobe.box(0, -0.18, 0.95, 0.30, 0.26, 0.30, [3.4, 0.35, 0.28]);
+  return { body: R.makeMesh(body), rotors: R.makeMesh(rotors), strobe: R.makeMesh(strobe) };
 }
 // The terminal flag: an Indonesian red-over-white on its pole, waved by
 // the scene rocking it on its hoist.
@@ -1448,6 +1484,9 @@ export function buildCockpit(R) {
   // Scope blips: the destination in warm cream, the next ring in gold.
   const bd = new Builder(); discXY(bd, 0, 0, 0, 0.052, 12, [1.50, 1.35, 1.05]); ringXY(bd, 0, 0, 0, 0.064, 0.078, 14, [0.85, 0.74, 0.52]);
   const br = new Builder(); discXY(br, 0, 0, 0, 0.060, 12, [2.20, 1.70, 0.50]);
+  // A patrol contact (v15.1): a small hot-red disc, the scope's one
+  // hostile colour — a drone on the glass is a drone she can hunt.
+  const bx = new Builder(); discXY(bx, 0, 0, 0, 0.046, 10, [2.60, 0.50, 0.35]);
   // The canopy glass: tinted panes from the layout, plus one brighter
   // reflection streak laid diagonally across the front pane.
   const gb = new Builder();
@@ -1460,7 +1499,7 @@ export function buildCockpit(R) {
   sb.quad([-0.62, 0.28, -2.83], [-0.10, 0.28, -2.83], [-0.30, -0.10, -2.83], [-0.80, -0.10, -2.83], [1.05, 1.10, 1.16]);
   sb.quad([-2.44, 0.55, -1.50], [-1.95, 0.72, -2.35], [-1.80, 0.10, -2.45], [-2.30, -0.05, -1.55], [1.05, 1.10, 1.16]);
   const streak = R.makeMesh(sb);
-  return { frame, needle, blipDest: R.makeMesh(bd), blipRing: R.makeMesh(br), glass, streak };
+  return { frame, needle, blipDest: R.makeMesh(bd), blipRing: R.makeMesh(br), blipDrone: R.makeMesh(bx), glass, streak };
 }
 
 // Draw the cockpit over the finished world: depth cleared, camera set
@@ -1478,6 +1517,9 @@ function drawCockpit(R, ck, st, proj) {
   const bl = radarBlips(st);
   R.draw(ck.blipDest, M4.compose(RADAR.x + bl.dest.nx * RADAR.r, RADAR.y + bl.dest.ny * RADAR.r, RADAR.z + 0.010, 0, 0, 0));
   if (bl.ring) R.draw(ck.blipRing, M4.compose(RADAR.x + bl.ring.nx * RADAR.r, RADAR.y + bl.ring.ny * RADAR.r, RADAR.z + 0.012, 0, 0, 0));
+  if (ck.blipDrone && bl.drones) for (const db of bl.drones) {
+    R.draw(ck.blipDrone, M4.compose(RADAR.x + db.nx * RADAR.r, RADAR.y + db.ny * RADAR.r, RADAR.z + 0.014, 0, 0, 0));
+  }
   R.draw(ck.glass, M4.ident(), 0.16);
   R.draw(ck.streak, M4.ident(), 0.13);
 }
@@ -1818,9 +1860,19 @@ export function createScene(R, assets) {
         if (!d.alive || d.escaped) continue;
         const bank = Math.sin(st.time * 3.4 + d.phase) * 0.35;
         const yaw = Math.sin(st.time * 1.3 + d.phase) * 0.22;
-        const m = M4.compose(d.x, d.altM, -d.dist, 0.06, yaw, bank, 1);
+        // A third larger on the sky than it was dealt (v15.1): at
+        // 300–600 m the original airframe was a speck even flown
+        // straight at, and a hunt the eyes cannot join is no hunt.
+        const m = M4.compose(d.x, d.altM, -d.dist, 0.06, yaw, bank, 1.35);
         R.draw(assets.drone.body, m);
         R.draw(assets.drone.rotors, M4.mul(m, M4.compose(0, 0, 0, 0, st.time * 26 + d.phase, 0)), 0.5);
+        // The strobe's double flash: two short burns a cycle, dark
+        // between — the rhythm reads as a light, not a glow.
+        if (assets.drone.strobe) {
+          const ph = (st.time * 0.85 + d.phase * 0.37) % 1;
+          const lit = ph < 0.07 || (ph >= 0.18 && ph < 0.25);
+          R.draw(assets.drone.strobe, m, lit ? 1 : 0.05);
+        }
       }
     }
     // The cockpit interior (v11): in cockpit mode, during a flight (the

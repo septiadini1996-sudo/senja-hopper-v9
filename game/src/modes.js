@@ -26,18 +26,30 @@ export function patrolWaveSpec(wave) {
   };
 }
 
-// Lay one wave ahead of the patrol: a loose gaggle 650–1,050 m in front
-// of the plane, spread across the lane and stacked through the band a
-// seaplane hunts in. Deterministic in (seed, wave) so a staged frame
-// and a test see the same sky.
-export function spawnPatrolWave(seed, wave, aheadOfDist) {
+// Lay one wave ahead of the patrol (v15.1 visibility fix): the first
+// sky the patrol met dealt its quarry 650–1,050 m out in a fixed low
+// band, and a human pilot flew a whole sortie without ever finding
+// one. A wave now deals INTO the patrol's own sky — a cone in front of
+// her heading, 300–600 m out, stacked within a wing's climb of the
+// altitude she already holds — so a patrol that simply flies straight
+// meets its targets, and the guide (below) only has to finish the
+// interception. Deterministic in (seed, wave) so a staged frame and a
+// test see the same sky. `origin` is the patrol's own state {dist, x,
+// alt}; a bare number still reads as a distance on the centreline in
+// the old band, for the callers that deal a sky before she is airborne.
+export const SPAWN_MIN = 300, SPAWN_MAX = 600;   // metres ahead of the nose
+export const SPAWN_CONE = 0.16;                  // lateral half-spread, × range
+export const SPAWN_ALT_BAND = 150;               // metres either side of her altitude
+export function spawnPatrolWave(seed, wave, origin) {
+  const o = typeof origin === 'number' ? { dist: origin, x: 0, alt: 30 } : origin;
   const spec = patrolWaveSpec(wave);
   const rnd = mulberry32(seed * 100003 + wave * 7919);
   const drones = [];
   for (let i = 0; i < spec.count; i++) {
-    const baseDist = aheadOfDist + 650 + rnd() * 400 + i * 55;
-    const baseX = (rnd() * 2 - 1) * 55;
-    const baseAlt = 16 + rnd() * 34; // the 16–50 m band seaplanes hunt in
+    const range = Math.min(SPAWN_MAX, SPAWN_MIN + rnd() * 270 + i * 8);
+    const baseDist = o.dist + range;
+    const baseX = o.x + (rnd() * 2 - 1) * range * SPAWN_CONE;
+    const baseAlt = clamp(o.alt + (rnd() * 2 - 1) * 45, 9, o.alt + SPAWN_ALT_BAND);
     drones.push({
       id: wave * 100 + i, wave,
       baseDist, baseX, baseAlt,
@@ -47,6 +59,26 @@ export function spawnPatrolWave(seed, wave, aheadOfDist) {
     });
   }
   return drones;
+}
+
+// The patrol's guide (v15.1): the nearest live drone, named in the
+// plane's own numbers — how far right, how far ahead, how far above,
+// and the slant range the HUD prints. A drone already sliding past
+// the nose is no target at all (the guns only speak forward), so the
+// guide prefers quarry still ahead of her and only falls back to any
+// live drone when nothing ahead remains. Pure, so the logic suite can
+// pin the choice and the flow pilot can fly by the same numbers the
+// player's marker shows.
+export function patrolGuide(drones, f) {
+  let ahead = null, any = null;
+  for (const d of drones) {
+    if (!d.alive || d.escaped) continue;
+    const dx = d.x - f.x, dz = d.dist - f.dist, dAlt = d.altM - f.alt;
+    const cand = { drone: d, dx, dz, dAlt, range: Math.hypot(dx, dz, dAlt) };
+    if (!any || cand.range < any.range) any = cand;
+    if (dz > -10 && (!ahead || cand.range < ahead.range)) ahead = cand;
+  }
+  return ahead || any;
 }
 
 // Advance every live drone one step. A drone weaves around its base

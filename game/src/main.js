@@ -20,7 +20,7 @@ import { minimapRoute, minimapPlane } from './minimap.js';
 import { createPreviewState, previewSelect, previewPose } from './preview.js';
 import { makeFrame, keyboardFrame, stickFrame, sliderValue, touchFrame, gyroFrame, gyroButtons, conditionFrame } from './input-core.js';
 import { pilotFrame } from './demo-pilot.js';
-import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, createPatrol, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
+import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, patrolGuide, createPatrol, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
 import { clamp, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
 
 const $ = s => document.querySelector(s);
@@ -817,6 +817,13 @@ function buildHud() {
   fire.addEventListener('pointercancel', fireOff);
   fire.addEventListener('lostpointercapture', fireOff);
   ui.append(fire);
+  // The guide marker (v15.1): a diamond + range label that rides the
+  // nearest drone's bearing while a patrol is airborne. Positioned
+  // every HUD pass by drawDroneGuide; shown and hidden with the rest
+  // of the patrol chrome.
+  const dmark = el('div'); dmark.id = 'dmark'; dmark.style.display = 'none';
+  dmark.innerHTML = '<i class="dm-dia"></i><span class="dm-lab"></span>';
+  ui.append(dmark);
   // Pause overlay
   const pause = el('div'); pause.id = 'pause';
   const pcard = el('div', 'panel'); pcard.style.cssText = 'display:flex;flex-direction:column;align-items:center;';
@@ -903,6 +910,35 @@ function updateModeChrome() {
   if (fb) { fb.style.display = patrol ? 'flex' : 'none'; fb.textContent = t('fire'); }
   const sg = $('#sight');
   if (sg) sg.style.display = patrol && camMode !== 'cockpit' ? 'block' : 'none';
+  if (!patrol) { const dm = $('#dmark'); if (dm) dm.style.display = 'none'; }
+}
+// The guide marker's placement (v15.1): the nearest drone projected
+// through the same pinhole the gunsight judges by — the plane's own
+// line, not the camera's — so when the diamond settles into the sight
+// the burst connects. The sight's centre (50%, 46%) is the origin;
+// angles run through the chase view's true field (1.05 rad vertical,
+// the scene's own number). Off-frame bearings clamp to the edge and
+// the label's arrow takes the direction: sideways when she must turn,
+// ▲/▼ when the quarry rides above or below her line.
+function drawDroneGuide(f) {
+  const dm = $('#dmark'); if (!dm) return;
+  const m = flightCtx && flightCtx.mode;
+  if (!m || m.kind !== 'patrol' || screen !== 'flight') { dm.style.display = 'none'; return; }
+  const g = patrolGuide(m.patrol.drones, f);
+  if (!g) { dm.style.display = 'none'; return; }
+  const W = window.innerWidth || 1280, H = window.innerHeight || 720;
+  const tanY = Math.tan(1.05 / 2), tanX = tanY * (W / H);
+  const dz = Math.max(g.dz, 1);
+  let fx = 0.5 + (g.dx / dz) / tanX / 2;
+  let fy = 0.46 - (g.dAlt / dz) / tanY / 2;
+  let arrow = g.dAlt > 4 ? '▲' : g.dAlt < -4 ? '▼' : '◆';
+  if (fx < 0.06) { fx = 0.06; arrow = '◀'; } else if (fx > 0.94) { fx = 0.94; arrow = '▶'; }
+  fy = clamp(fy, 0.10, 0.88);
+  dm.style.display = 'flex';
+  dm.style.left = (fx * W) + 'px';
+  dm.style.top = (fy * H) + 'px';
+  const lab = dm.querySelector('.dm-lab');
+  if (lab) lab.textContent = `DRONE ${arrow} ${Math.max(0, Math.round(g.range))} M`;
 }
 
 // ---------- flight lifecycle ----------
@@ -1106,7 +1142,10 @@ function startMode(kind) {
   flightCtx.booms = [];
   if (kind === 'patrol') {
     mode.patrol.wave = 1;
-    mode.patrol.drones = spawnPatrolWave(mode.seed, 1, 0);
+    // Dealt into her own sky (v15.1): from the state she takes off in,
+    // so the first wave waits in the cone ahead of her climb-out.
+    const f0 = flightCtx.flight;
+    mode.patrol.drones = spawnPatrolWave(mode.seed, 1, { dist: f0.dist, x: f0.x, alt: f0.alt });
   }
   if (kind === 'race') initRace();
   updateModeChrome();
@@ -1143,7 +1182,9 @@ function stepMode(dt) {
     stepDrones(p.drones, f.dist, dt, f.t);
     if (!p.drones.some(d => d.alive && !d.escaped)) {
       p.wave += 1;
-      p.drones.push(...spawnPatrolWave(m.seed, p.wave, f.dist));
+      // The next wave deals from where she flies NOW (v15.1) — her
+      // altitude band, her heading — never back at the old fixed sky.
+      p.drones.push(...spawnPatrolWave(m.seed, p.wave, { dist: f.dist, x: f.x, alt: f.alt }));
     }
     m.cool = Math.max(0, m.cool - dt);
     if ((keys.has('Space') || fireHeld) && f.airborne && m.cool <= 0) {
@@ -1363,6 +1404,7 @@ function updateHud() {
     if (m.kind === 'patrol') {
       if (objEl2) objEl2.innerHTML = t('hud_patrol', { n: m.patrol.downed, s: m.patrol.score });
       guide.textContent = t('guide_patrol', { w: m.patrol.wave });
+      drawDroneGuide(f);
       $('#timer').textContent = fmtClock(Math.max(0, m.patrol.left));
       $('#hud-rings').innerHTML = `${t('wave', { n: m.patrol.wave })} <b>${m.patrol.drones.filter(d => d.alive && !d.escaped).length}</b>`;
       $('#hud-dest').innerHTML = `▸ <b>${t('mode_patrol')}</b>`;
@@ -1395,7 +1437,16 @@ function drawRadar(f) {
   g.beginPath(); g.arc(cx, cy, R * 0.55, 0, Math.PI * 2);
   g.strokeStyle = 'rgba(255, 220, 160, 0.22)'; g.lineWidth = 1; g.stroke();
   const remain = Math.max(0, f.legDist - f.dist);
-  const scale = Math.max(remain, 320); // metres mapped to the scope radius
+  // A patrol's scope works the hunt, not the leg (v15.1): the radius
+  // fits the farthest live drone, the same rule the cockpit scope
+  // follows, so the quarry spreads across the glass.
+  const pm = flightCtx && flightCtx.mode;
+  const liveDrones = pm && pm.kind === 'patrol' ? pm.patrol.drones.filter(d => d.alive && !d.escaped) : [];
+  let scale = Math.max(remain, 320); // metres mapped to the scope radius
+  if (liveDrones.length) {
+    scale = 320;
+    for (const d of liveDrones) scale = Math.max(scale, Math.abs(d.dist - f.dist), Math.abs(d.x - f.x));
+  }
   const plot = (dx, dz) => {
     let px = dx / scale * R, py = -dz / scale * R;
     const len = Math.hypot(px, py);
@@ -1426,6 +1477,16 @@ function drawRadar(f) {
     g.fillStyle = '#6fc3ff';
     g.beginPath(); g.arc(gx, gy, 4, 0, Math.PI * 2); g.fill();
     g.strokeStyle = 'rgba(111, 195, 255, 0.7)'; g.stroke();
+  }
+  // The patrol's quarry (v15.1): hot-red diamonds, the scope's one
+  // hostile mark — where they sit is where the hunt goes.
+  for (const d of liveDrones) {
+    const [px2, py2] = plot(d.x - f.x, d.dist - f.dist);
+    g.save(); g.translate(px2, py2); g.rotate(Math.PI / 4);
+    g.fillStyle = '#ff5030';
+    g.fillRect(-3.4, -3.4, 6.8, 6.8);
+    g.strokeStyle = 'rgba(255, 217, 168, 0.85)'; g.lineWidth = 1; g.strokeRect(-3.4, -3.4, 6.8, 6.8);
+    g.restore();
   }
   // The plane: a wedge at the centre, leaning with her bank.
   g.save();
@@ -1502,6 +1563,37 @@ function drawMinimap(f) {
   g.beginPath(); g.moveTo(0, -7); g.lineTo(4.8, 5.4); g.lineTo(0, 2.6); g.lineTo(-4.8, 5.4); g.closePath();
   g.fillStyle = '#f2a541'; g.fill();
   g.restore();
+  // The modes mark their company on the box (v15.1): a patrol's live
+  // drones as small red diamonds on the lane, a race's rivals as
+  // triangles wearing their initials — Sinta teal, Bagas gold, the
+  // liveries' own colours — each at its true along-track place.
+  const mm = flightCtx.mode;
+  const markAt = (dist, lat) => {
+    const fr = clamp((dist || 0) / Math.max(1, f.legDist), 0, 1);
+    return [A.x + ux * len * fr + nx * clamp((lat || 0) / LAT, -1, 1) * 15,
+            A.y + uy * len * fr + ny * clamp((lat || 0) / LAT, -1, 1) * 15];
+  };
+  if (mm && mm.kind === 'patrol') {
+    for (const d of mm.patrol.drones) {
+      if (!d.alive || d.escaped) continue;
+      const [mx, my] = markAt(d.dist, d.x);
+      g.save(); g.translate(mx, my); g.rotate(Math.PI / 4);
+      g.fillStyle = '#ff5030'; g.fillRect(-2.6, -2.6, 5.2, 5.2);
+      g.restore();
+    }
+  } else if (mm && mm.kind === 'race') {
+    const cols = ['#2fb3a8', '#f2b326'];
+    mm.race.rivals.forEach((r, i) => {
+      if (!r.flight) return;
+      const [mx, my] = markAt(r.flight.dist, r.flight.x);
+      g.save(); g.translate(mx, my); g.rotate(Math.atan2(uy, ux) + Math.PI / 2);
+      g.beginPath(); g.moveTo(0, -5.5); g.lineTo(4.2, 4.4); g.lineTo(-4.2, 4.4); g.closePath();
+      g.fillStyle = cols[i] || '#f2a541'; g.fill();
+      g.restore();
+      g.fillStyle = '#ffe9c4'; g.font = '800 8px system-ui'; g.textAlign = 'center';
+      g.fillText(r.def.name.charAt(0), mx, my - 8);
+    });
+  }
   g.fillStyle = '#f3d9b0'; g.font = '700 8.5px system-ui'; g.textAlign = 'center';
   g.fillText(rt.from.name.toUpperCase(), A.x, H - 4);
   g.fillText(rt.to.name.toUpperCase(), B.x, 12);
@@ -2046,7 +2138,17 @@ window.__senja = {
     const m = flightCtx && flightCtx.mode;
     if (!m) return null;
     const out = { kind: m.kind, endReason: m.endReason || null, newBest: !!m.newBest };
-    if (m.patrol) out.patrol = { downed: m.patrol.downed, score: m.patrol.score, shots: m.patrol.shots, hits: m.patrol.hits, wave: m.patrol.wave, left: m.patrol.left, drones: m.patrol.drones.filter(d => d.alive && !d.escaped).length };
+    if (m.patrol) {
+      out.patrol = { downed: m.patrol.downed, score: m.patrol.score, shots: m.patrol.shots, hits: m.patrol.hits, wave: m.patrol.wave, left: m.patrol.left, drones: m.patrol.drones.filter(d => d.alive && !d.escaped).length };
+      // The guide's own numbers (v15.1): the same target the HUD
+      // marker rides, so a test pilot can fly the interception the
+      // way a player does — by the guide, not by pinned coordinates.
+      const gd = patrolGuide(m.patrol.drones, flightCtx.flight);
+      out.patrol.guide = gd ? { dx: Math.round(gd.dx * 10) / 10, dz: Math.round(gd.dz), dAlt: Math.round(gd.dAlt * 10) / 10, range: Math.round(gd.range) } : null;
+      // The marker as the player sees it: where it sits, what it says.
+      const dm = document.getElementById('dmark');
+      out.patrol.marker = dm ? { shown: dm.style.display !== 'none', text: (dm.querySelector('.dm-lab') || {}).textContent || '' } : null;
+    }
     if (m.rush) out.rush = { score: m.rush.score, combo: m.rush.combo, threaded: m.rush.threaded, bestStreak: m.rush.bestStreak, left: m.rush.left };
     if (m.race) out.race = { position: m.race.position || racePosition(flightCtx.flight, m.race.rivals.map(r => r.flight)), rivals: m.race.rivals.map(r => ({ dist: r.flight ? r.flight.dist : 0, done: r.flight ? r.flight.done : false, outcome: r.flight ? r.flight.outcome : null })) };
     if (m.kind === 'free') out.free = { at: freeAt >= 0 ? freeAt : save.islandIdx, visitNew: !!m.freeVisitNew };

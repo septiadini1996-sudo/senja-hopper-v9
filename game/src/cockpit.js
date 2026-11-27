@@ -72,7 +72,17 @@ export function gaugeReadings(f) {
 // both clamped to the scope's rim. Returns [] entries as null when absent.
 export function radarBlips(f) {
   const remain = Math.max(0, f.legDist - f.dist);
-  const scale = Math.max(remain, 320); // metres mapped to the scope radius
+  // A patrol's scope works the hunt, not the leg (v15.1): when the
+  // state carries drones, the radius fits the farthest live one, so
+  // the quarry plots across the glass instead of crowding the centre
+  // of a 12 km scale. Campaign states carry no drones and read as
+  // they always have.
+  const live = (f.drones || []).filter(d => d.alive && !d.escaped);
+  let scale = Math.max(remain, 320); // metres mapped to the scope radius
+  if (live.length) {
+    scale = 320;
+    for (const d of live) scale = Math.max(scale, Math.abs(d.dist - f.dist), Math.abs(d.x - f.x));
+  }
   const plot = (dx, dz) => {
     let nx = dx / scale, ny = dz / scale;
     const len = Math.hypot(nx, ny);
@@ -82,7 +92,8 @@ export function radarBlips(f) {
   const dest = plot(0 - f.x, remain);
   const next = (f.rings || []).find(r => !r.passed && !r.missed);
   const ring = next ? plot(next.x - f.x, next.dist - f.dist) : null;
-  return { dest, ring, remain };
+  const drones = live.map(d => plot(d.x - f.x, d.dist - f.dist));
+  return { dest, ring, remain, drones };
 }
 
 // The whole cockpit as the test surface sees it: what is fitted, and what
