@@ -237,8 +237,24 @@ export function createAudio(getSettings) {
   }
   function pickSpeechVoice(want) {
     if (!speechVoices.length) return null;
-    const starts = p => speechVoices.find(v => (v.lang || '').toLowerCase().startsWith(p));
-    return starts(want + '-') || starts(want) || (want === 'id' ? starts('en') : null) || null;
+    const starts = p => speechVoices.filter(v => (v.lang || '').toLowerCase().startsWith(p));
+    // The most natural voice on offer (v18): within the language's
+    // own list, the platform's natural engines outrank the robotic
+    // defaults — Google voices and names wearing Natural / Neural /
+    // Premium / Enhanced score up, on-device voices a little, and
+    // equal scores keep the platform's own order.
+    const score = v => {
+      const n = (v.name || '').toLowerCase();
+      let sc = 0;
+      if (n.includes('google')) sc += 3;
+      if (n.includes('natural')) sc += 3;
+      if (n.includes('neural')) sc += 2;
+      if (n.includes('premium') || n.includes('enhanced')) sc += 2;
+      if (v.localService) sc += 1;
+      return sc;
+    };
+    const best = list => list.slice().sort((a, b2) => score(b2) - score(a))[0] || null;
+    return best(starts(want + '-')) || best(starts(want)) || (want === 'id' ? best(starts('en')) : null) || null;
   }
   // The health watchdog: a healthy platform starts an utterance
   // almost at once. Silence past ~600 ms means the channel dropped
@@ -376,31 +392,46 @@ export function createAudio(getSettings) {
     const syl = syllables(text);
     let t = t0 + 0.18, seed = 7;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    // A bed of static under the whole utterance.
+    // A bed of static under the whole utterance — quieter in v18:
+    // the voice should sit ON the channel, not drown in it.
     try {
       const src = ctx.createBufferSource(); src.buffer = getNoise(); src.loop = true;
       const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1500; f.Q.value = 0.4;
-      const g = ctx.createGain(); g.gain.value = 0.012;
+      const g = ctx.createGain(); g.gain.value = 0.007;
       src.connect(f); f.connect(g); g.connect(radioGain);
-      src.start(t); src.stop(t + syl.length * 0.13 + 0.3);
+      src.start(t); src.stop(t + syl.length * 0.15 + 0.3);
     } catch { /* static is garnish */ }
     syl.forEach((sy, i) => {
       if (sy.gap) { t += 0.055; return; }
-      const dur = 0.075 + Math.min(sy.n, 5) * 0.012 + rnd() * 0.02;
+      // Longer syllable cores (v18): a vowel given time to BE a
+      // vowel is the whole difference between a buzz and a voice.
+      const dur = 0.088 + Math.min(sy.n, 5) * 0.014 + rnd() * 0.02;
       const frac = i / Math.max(1, syl.length - 1);
       const contour = sy.end ? 0.84 : 1 + Math.sin(frac * Math.PI) * 0.10 + (rnd() - 0.5) * 0.09;
       const f0 = base * contour;
       try {
         const o = ctx.createOscillator(); o.type = 'sawtooth';
         o.frequency.setValueAtTime(f0 * (0.94 + rnd() * 0.1), t);
-        const bp1 = ctx.createBiquadFilter(); bp1.type = 'bandpass'; bp1.frequency.value = 480 + rnd() * 260; bp1.Q.value = 2.2;
-        const bp2 = ctx.createBiquadFilter(); bp2.type = 'bandpass'; bp2.frequency.value = 1350 + rnd() * 500; bp2.Q.value = 3.0;
+        // Sharper formant definition (v18): each band SWEEPS into
+        // its target over the syllable's first half — a formant
+        // that arrives reads as articulation; one that simply sits
+        // there reads as a drone. A third presence band around
+        // 2.4 kHz, quieter than the pair, puts the edge on it.
+        const f1 = 480 + rnd() * 260, f2 = 1350 + rnd() * 500;
+        const bp1 = ctx.createBiquadFilter(); bp1.type = 'bandpass'; bp1.Q.value = 2.2;
+        bp1.frequency.setValueAtTime(f1 * 0.82, t);
+        bp1.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.45);
+        const bp2 = ctx.createBiquadFilter(); bp2.type = 'bandpass'; bp2.Q.value = 3.0;
+        bp2.frequency.setValueAtTime(f2 * 0.85, t);
+        bp2.frequency.exponentialRampToValueAtTime(f2, t + dur * 0.45);
+        const bp3 = ctx.createBiquadFilter(); bp3.type = 'bandpass'; bp3.frequency.value = 2400; bp3.Q.value = 2.5;
+        const g3 = ctx.createGain(); g3.gain.value = 0.35;
         const g = ctx.createGain();
         g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(0.16, t + 0.014);
+        g.gain.linearRampToValueAtTime(0.16, t + 0.006);
         g.gain.setValueAtTime(0.16, t + dur * 0.7);
         g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-        o.connect(bp1); bp1.connect(g); o.connect(bp2); bp2.connect(g); g.connect(radioGain);
+        o.connect(bp1); bp1.connect(g); o.connect(bp2); bp2.connect(g); o.connect(bp3); bp3.connect(g3); g3.connect(g); g.connect(radioGain);
         o.start(t); o.stop(t + dur + 0.03);
       } catch { /* one syllable lost, the transmission survives */ }
       t += dur + 0.018;

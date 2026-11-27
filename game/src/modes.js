@@ -504,12 +504,13 @@ export function raceFinishTime(rivalFlight, nowT) {
 // the title's mode cards read the bests back. Pure over the modes
 // object so the migration and the bookkeeping test without a browser.
 export function defaultModes() {
-  return { patrolBest: 0, patrolDowned: 0, rushBest: 0, rushStreak: 0, raceBest: null, raceWins: 0, freeVisits: [], stuntBest: 0 };
+  return { patrolBest: 0, patrolDowned: 0, patrolDowns: 0, rushBest: 0, rushStreak: 0, raceBest: null, raceWins: 0, freeVisits: [], stuntBest: 0 };
 }
 export function recordPatrol(modes, score, downed) {
   const best = score > (modes.patrolBest || 0);
   if (best) modes.patrolBest = score;
   if (downed > (modes.patrolDowned || 0)) modes.patrolDowned = downed;
+  modes.patrolDowns = (modes.patrolDowns || 0) + (downed || 0); // career total (v18): the achievement counts every drone, not the best sortie
   return best;
 }
 export function recordRush(modes, score, bestStreak) {

@@ -10,7 +10,7 @@ import { cockpitState } from './cockpit.js';
 import { createFlight, stepFlight, settleFlight, guidance, objectiveState, fitBonus, fitBestClass, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
 import { ISLANDS, HOP_M, ringCourse, islandPositions, islandOutline } from './world.js';
-import { loadSave, storeSave, defaultSave, morningBoard, applyResult, applyType, ticketGate, challengeResult, windForSeason, buyPlane, switchPlane, UPGRADE_COST, CHALLENGES, SAVE_KEY } from './state.js';
+import { loadSave, storeSave, defaultSave, morningBoard, applyResult, applyType, ticketGate, challengeResult, windForSeason, buyPlane, switchPlane, UPGRADE_COST, CHALLENGES, SAVE_KEY, achievementState, claimAchievements, roundRp, passengerCorePay, farePerPax, difficultyOf, DIFFICULTY_MULT } from './state.js';
 import { PLANES, planeById } from './planes.js';
 import { createLook, lookDrag, lookRelease, lookSet, updateLook } from './look.js';
 import { makeT } from './i18n.js';
@@ -176,6 +176,7 @@ function renderTitle() {
     btn(t('hangar'), '', 'hangar', () => { renderHangar(); show('hangar'); }),
     btn(t('controls'), '', 'controls', () => { controlsReturn = 'title'; renderControls(); show('controls'); }),
     btn(t('challenges'), '', 'challenges', () => { renderChallenges(); show('challenges'); }),
+    btn(t('achievements'), '', 'achievements', () => { renderAchievements(); show('achievements'); }),
     btn(t('pilot_stats'), '', 'stats', () => { renderStats(); show('stats'); }),
     btn(t('settings'), '', 'settings', () => { renderSettings(); show('settings'); }),
     btn(t('how_to_play'), '', 'howto', () => show('howto')),
@@ -247,6 +248,12 @@ function typeIcon(type) {
 function renderBoard() {
   const s = $('#scr-board'); s.innerHTML = '';
   s.append(chipsRow(), el('h2', 'ptitle', t('board_title')), el('p', 'meta', t('board_hint')));
+  // The collection lines (v18): the 50-mission catalogue and the
+  // achievement shelf, counted where the day's work is chosen — the
+  // two long games visible beside the short one.
+  const unlocked = achievementState(save).filter(a => a.unlocked).length;
+  s.append(el('p', 'meta progressline',
+    `${t('missions_progress', { done: (save.missionsDone || []).length })} · ${t('ach_progress_line', { n: unlocked })}`));
   const activePlane = planeById(save.planes.active);
   const activeCap = activePlane.capacity;
   const activeIcon = planeIconImg(save.planes.active, 'ticketicon');
@@ -264,11 +271,33 @@ function renderBoard() {
     const typerow = el('div', 'row');
     const badge = el('span', 'typebadge'); badge.append(typeIcon(tk.type || 'cargo'));
     typerow.append(badge, el('span', 'tag side', t('type_' + (tk.type || 'cargo'))));
+    // Difficulty (v18): gold stars ride the type row — the same
+    // stars the pay was multiplied by, stated where the job is read.
+    if (tk.stars) {
+      const st = el('span', 'stars');
+      st.append(document.createTextNode('★'.repeat(tk.stars) + '☆'.repeat(5 - tk.stars) + ' '),
+        el('span', 'diffword', t('diff_' + tk.stars)));
+      typerow.append(st);
+    }
+    // The group (v18): a passenger job names its headcount on the
+    // type row, icon and all — the number the seats gate reads.
+    if ((tk.type || 'cargo') === 'passenger' && typeof tk.pax === 'number') {
+      const pb = el('span', 'paxbadge');
+      pb.append(typeIcon('passenger'), document.createTextNode(' ' + t('pax_count', { n: tk.pax })));
+      typerow.append(pb);
+    }
     card.append(typerow);
+    // A catalogue mission (v18) flies under its own name.
+    if (tk.missionName) card.append(el('p', 'missionname', save.settings.lang === 'id' ? tk.missionNameId : tk.missionName));
     const cargo = save.settings.lang === 'id' ? tk.cargoId : tk.cargo;
     const meta = el('p', 'meta', `${tk.customer} — ${t('cargo')}: ${cargo}\n${t('distance')}: ${(tk.dist / 1000).toFixed(1)} km · ${tk.rings.length} ${t('rings_avail')}\n${t('departs')}: ${fmtGameHour(tk.depHour)} · ${wxIcon(tk.weather)} ${t('wx_' + tk.weather)}`);
     meta.style.whiteSpace = 'pre-line';
     card.append(meta);
+    // The fare, shown working (v18): heads × the leg's fare — the
+    // multiplication the receipt will settle, printed on the ticket.
+    if ((tk.type || 'cargo') === 'passenger' && typeof tk.pax === 'number' && typeof tk.fare === 'number') {
+      card.append(el('p', 'meta paxline', t('pax_math', { n: tk.pax, fare: fmtRp(tk.fare) })));
+    }
     const objKey = 'objb_' + (tk.type || 'cargo');
     card.append(el('p', 'meta objbox',
       t(objKey, { par: tk.par || 0, need: Math.ceil(tk.rings.length * 0.6) }) + ' · ' + t('weight_line', { n: tk.weight || 1 })));
@@ -283,6 +312,9 @@ function renderBoard() {
     const gate = ticketGate(tk, activePlane, save);
     if ((tk.weight || 1) > 1) card.append(el('p', 'reqbadge', t('needs_class', { n: tk.weight })));
     else if ((tk.type || 'cargo') === 'storm' && !tk.main) card.append(el('p', 'reqbadge', t('needs_storm')));
+    if ((tk.type || 'cargo') === 'passenger' && typeof tk.pax === 'number' && tk.pax > activePlane.seats) {
+      card.append(el('p', 'reqbadge', t('needs_seats', { n: tk.pax })));
+    }
     const fit = fitBonus(tk, activeCap);
     if (fit.pct > 0) {
       card.append(el('p', 'fitline', t('fit_match', { pct: Math.round(fit.pct * 100) })));
@@ -328,6 +360,7 @@ function renderMap() {
   cv.width = 680; cv.height = 400; cv.style.width = '100%'; cv.style.display = 'block';
   card.append(cv); s.append(card);
   s.append(el('p', 'meta', t('map_hint')));
+  s.append(el('p', 'meta progressline', t('missions_progress', { done: (save.missionsDone || []).length })));
   s.append(btn(t('back'), 'small', 'map-back', closeMap));
   drawMapChart(cv);
 }
@@ -445,7 +478,7 @@ function renderHangar() {
     if (active) row.append(el('span', 'tag', t('active_plane')));
     else if (!owned && !p.finale) row.append(el('span', 'tag side', fmtRp(p.price)));
     const stats = el('p', 'meta',
-      `${t('top_speed')}: ${Math.round(89 * p.speedMul)} KT · ${t('climb_w')}: ${Math.round(p.climbMul * 100)}% · ${t('capacity_w')}: ${p.capacity} · ${p.callsign}`);
+      `${t('top_speed')}: ${Math.round(89 * p.speedMul)} KT · ${t('climb_w')}: ${Math.round(p.climbMul * 100)}% · ${t('capacity_w')}: ${p.capacity} · ${t('seats_w')}: ${p.seats} · ${p.callsign}`);
     card.append(row, stats);
     // Her trade (v17): one line saying what this airframe is FOR —
     // the matching system's other half, read where planes are chosen.
@@ -613,6 +646,22 @@ function renderChallenges() {
     row.append(el('span', 'route', t(keys[ch.id.replace(/[0-9]/g, '')] || keys[ch.kind], { n: ch.n, g: ch.g })),
       save.challengesDone.includes(ch.id) ? el('span', 'tag', t('ch_done')) : el('span', 'tag side', `${t('ch_bonus')} ${fmtRp(ch.bonus)}`));
     card.append(row); s.append(card);
+  }
+  s.append(btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }));
+}
+// The achievement shelf (v18): fourteen long-game honours, each
+// derived live from the save's own counters — lit when earned, dim
+// with its progress while it is still ahead of her.
+function renderAchievements() {
+  const s = $('#scr-achievements'); s.innerHTML = '';
+  s.append(chipsRow(), el('h2', 'ptitle', t('achievements')));
+  for (const a of achievementState(save)) {
+    const card = el('div', 'panel card achcard' + (a.unlocked ? ' lit' : ''));
+    const row = el('div', 'row');
+    row.append(el('span', 'route', t('ach_' + a.id)),
+      el('span', 'tag' + (a.unlocked ? '' : ' side'), a.unlocked ? '★' : `${a.progress}/${a.target}`));
+    card.append(row, el('p', 'meta', t('ach_' + a.id + '_desc')));
+    s.append(card);
   }
   s.append(btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }));
 }
@@ -791,7 +840,7 @@ function renderHowto() {
   card.append(el('p', 'meta', t('how_body')));
   s.append(card, btn(t('back'), 'small', 'back', () => { renderTitle(); show('title'); }));
 }
-function renderAll() { renderTitle(); renderBoard(); renderHangar(); renderControls(); renderChallenges(); renderStats(); renderSettings(); renderHowto(); renderMap(); }
+function renderAll() { renderTitle(); renderBoard(); renderHangar(); renderControls(); renderChallenges(); renderAchievements(); renderStats(); renderSettings(); renderHowto(); renderMap(); }
 
 // ---------- flight HUD & controls (built once, updated per frame) ----------
 function buildHud() {
@@ -1165,7 +1214,11 @@ function finishFlight(instant = false) {
     && !save.stamps.includes(ISLANDS[ticket.to].id));
   if (ctx.challenge) save.challengesDone.push(ctx.challenge.id);
   const wasJetLocked = !save.planes.owned.includes('raksasa');
-  applyResult(save, ticket, f, settle, ctx.challenge ? ctx.challenge.bonus : 0);
+  applyResult(save, ticket, f, settle, ctx.challenge ? ctx.challenge.bonus : 0, save.planes.active);
+  // Achievements (v18): claimed AFTER the result lands, so the
+  // receipt can name what this flight just unlocked — each honour
+  // claimed exactly once, however many flights re-derive it.
+  ctx.newAchievements = claimAchievements(save);
   ctx.jetJustUnlocked = wasJetLocked && save.planes.owned.includes('raksasa');
   storeSave(store, save);
   audio.engineStop(); audio.windStop(); audio.rainStop();
@@ -1227,7 +1280,11 @@ function renderReceipt() {
   const keyFor = { ticket: 'r_ticket', rings: 'r_rings', centre: 'r_centre', gradebonus: 'r_gradebonus', fuel: 'r_fuel', fee: 'r_fee', comfort: 'r_comfort', photo: 'r_photo', express: 'r_express', trial: 'r_trial', fit: 'r_fit' };
   for (const line of settle.lines) {
     const m = el('div', 'money');
-    m.append(el('span', '', t(keyFor[line.k]) + (line.n ? ` ×${line.n}` : '')),
+    // A passenger line shows its multiplication (v18): heads × fare.
+    const label = line.k === 'ticket' && typeof line.pax === 'number'
+      ? `${t(keyFor[line.k])} — ${t('pax_math', { n: line.pax, fare: fmtRp(line.fare) })}`
+      : t(keyFor[line.k]) + (line.n ? ` ×${line.n}` : '');
+    m.append(el('span', '', label),
       el('b', '', (line.amt < 0 ? '− ' : '+ ') + fmtRp(Math.abs(line.amt))));
     card.append(m);
   }
@@ -1250,6 +1307,14 @@ function renderReceipt() {
     card.append(el('p', 'meta', `RADIO — ${radioText({ key: lastRadio, speaker: 'tower' })}`));
   }
   s.append(card);
+  // New honours (v18): what this flight unlocked, named on the
+  // receipt while the ink is wet.
+  for (const id of flightCtx.newAchievements || []) {
+    const cel = el('div', 'panel card achcard lit');
+    cel.append(el('h3', 'ptitle', `${t('ach_banner')} — ${t('ach_' + id)}`),
+      el('p', 'meta', t('ach_' + id + '_desc')));
+    s.append(cel);
+  }
   // The finale celebration (v13): the flight that completes the chain
   // unlocks the flagship, and the receipt says so before anything else.
   if (flightCtx.jetJustUnlocked) {
@@ -1609,6 +1674,9 @@ function finishModeFlight() {
       freeAt = ctx.ticket.to;
     } else if (f.outcome === 'splash') freeAt = ctx.ticket.from; // picked up, back on the strip she left
   }
+  // The patrol honour (v18) is claimed on the mode receipt too —
+  // career drone downs are banked by recordPatrol just above.
+  ctx.newAchievements = claimAchievements(save);
   storeSave(store, save);
   setTimeout(() => { renderModeReceipt(); show('receipt'); }, 650);
 }
@@ -1665,6 +1733,12 @@ function renderModeReceipt() {
   }
   if (m.newBest) card.append(el('p', 'meta', '✦ ' + t('mode_new_best')));
   s.append(el('h2', 'ptitle', title), card);
+  for (const id of ctx.newAchievements || []) {
+    const cel = el('div', 'panel card achcard lit');
+    cel.append(el('h3', 'ptitle', `${t('ach_banner')} — ${t('ach_' + id)}`),
+      el('p', 'meta', t('ach_' + id + '_desc')));
+    s.append(cel);
+  }
   const btnRow = el('div', 'row'); btnRow.style.justifyContent = 'center';
   if (m.kind === 'free') {
     btnRow.append(
@@ -2334,7 +2408,7 @@ function drawVeil() {
 
 // ---------- boot & screenshot staging ----------
 function buildScreens() {
-  for (const name of ['title', 'board', 'hangar', 'controls', 'challenges', 'stats', 'settings', 'howto', 'receipt', 'map']) {
+  for (const name of ['title', 'board', 'hangar', 'controls', 'challenges', 'achievements', 'stats', 'settings', 'howto', 'receipt', 'map']) {
     const s = el('section', 'screen'); s.id = 'scr-' + name; ui.append(s);
   }
 }
@@ -2540,17 +2614,49 @@ if (shot === 'flight' || shot === 'receipt') {
 } else if (shot === 'controls') {
   controlsReturn = 'title'; renderControls(); show('controls');
 } else if (shot === 'board') {
-  // The board frame (v15): a mid-campaign morning, pinned whole —
-  // the profile's earlier frames settle flights and move the day, so
-  // an unpinned board would drift between captures. Standing on
-  // Penida with one stamp banked and a working balance, the day seed
-  // fixed: the tickets regenerate identically every run.
+  // The board frame (v18): the new systems on one morning, pinned
+  // whole like every frame. Standing on Sulawesi with five stamps
+  // banked and the Alap-Alap on the line, nine catalogue missions
+  // done: the header counts MISSIONS 9/50 and ACHIEVEMENTS 2/14,
+  // every ticket wears its stars, and the first two side tickets
+  // are shaped into passenger groups by the game's own math — the
+  // first a group too big for her twelve seats (NEEDS SEATS + the
+  // refusal), the second one she can carry — so the frame shows
+  // the seats economy working, not just existing.
   save.settings.lang = 'en'; t = makeT('en'); save.started = true;
-  save.islandIdx = 1; save.stamps = ['penida']; save.saldo = 326000;
-  save.day = 2; save.clockH = 7.5;
+  save.islandIdx = 5; save.stamps = ['penida', 'lombok', 'sumbawa', 'flores', 'sulawesi'];
+  save.saldo = 410000;
+  save.planes.owned = ['kutilang', 'pipit', 'alap']; save.planes.active = 'alap';
+  setActivePlaneMesh();
+  save.missionsDone = ['m01', 'm02', 'm07', 'm13', 'm19', 'm20', 'm25', 'm26', 'm31'];
+  save.stats.deliveries = 9; save.stats.earned = 640000; save.stats.stormRuns = 1;
+  save.day = 3; save.clockH = 7.5;
   boardCache = { day: -1, tickets: [] };
+  const staged = board();
+  const shapePax = (tk, pax) => {
+    if (!tk || tk.main) return;
+    if (tk.type !== 'passenger') {
+      applyType(tk, 'passenger', 7);
+      delete tk.missionId; delete tk.missionName; delete tk.missionNameId;
+    }
+    tk.weight = 1;
+    tk.pax = pax;
+    tk.fare = farePerPax(tk.dist);
+    tk.payCore = passengerCorePay(tk.dist, pax, 1);
+    tk.stars = difficultyOf(tk);
+    tk.pay = roundRp(tk.payCore * DIFFICULTY_MULT[tk.stars]);
+  };
+  shapePax(staged[1], 15);
+  shapePax(staged[2], 9);
   envNow = skyAt(save.day, save.clockH, null);
   showBoard();
+  // The scroll pin: the frame must carry the header counts AND the
+  // gated card's badge in one 720p window, so the board is pinned
+  // by measurement off the progress line itself (the hangar pin's
+  // trick) — the line rides near the top, the stamp card whole
+  // beneath it, and the seats refusal lands inside the frame.
+  const bs = $('#scr-board'), pl = bs.querySelector('.progressline');
+  if (pl) bs.scrollTop = Math.max(0, pl.offsetTop - 12);
 } else if (shot === 'hangar') {
   // The fleet frame (v16.1): the endgame hangar — the campaign
   // complete, every airframe hers, the flagship selected so her

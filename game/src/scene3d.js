@@ -88,6 +88,24 @@ function beam(b, p0, p1, w, color) {
 
 const GLASS = [0.07, 0.13, 0.18], METAL = [0.58, 0.60, 0.63], RUBBER = [0.16, 0.13, 0.11];
 
+// Reshape a finished builder (v18): scale X by sx and Z about the
+// prop pivot by sz, then recompute every flat face normal from the
+// scaled geometry (each primitive emits whole triangles, so the
+// vertex triples group exactly). The fleet's bodies differ by
+// capacity; the pivot keeps every nose on the shared prop plane.
+function reshape(b, sx, sz, pivotZ) {
+  const p = b.pos, n = b.nor;
+  for (let i = 0; i < p.length; i += 3) {
+    p[i] *= sx;
+    p[i + 2] = pivotZ + (p[i + 2] - pivotZ) * sz;
+  }
+  for (let v = 0; v + 9 <= p.length; v += 9) {
+    const a = [p[v], p[v + 1], p[v + 2]], c = [p[v + 3], p[v + 4], p[v + 5]], d = [p[v + 6], p[v + 7], p[v + 8]];
+    const nn = norm3(cross3(sub3(c, a), sub3(d, a)));
+    for (let k = 0; k < 3; k++) { n[v + k * 3] = nn[0]; n[v + k * 3 + 1] = nn[1]; n[v + k * 3 + 2] = nn[2]; }
+  }
+}
+
 // One airframe builder, four liveries (v12): the fleet's planes are the
 // same shaped body wearing different paint, spans and cheatlines — the
 // spec comes from planes.js (body / accent / cheat colours, wing span).
@@ -120,12 +138,14 @@ export function buildPlane(R, spec) {
   seg2(b, -1.58, 0.96, 0.60, 1.60, 0.58, 1.05, 0.64, 1.64, GLASS);
   b.box(0, 1.97, -0.50, 0.46, 0.07, 2.05, CREAM); // roof spine
   b.box(0, 1.78, -1.56, 0.07, 0.42, 0.07, CREAM); // windscreen pillar
-  // Livery: a teal cheatline hugging each flank of the cabin, and the
-  // registration as micro-bars on the tail cone — the engine has no text,
-  // so lettering is faked with five small dark blocks that read as
-  // characters at chase distance.
+  // Livery: a teal cheatline band hugging each flank of the cabin —
+  // widened in v18 to run UNDER the window line, so the scheme
+  // reads through the panes the way a real livery does — and the
+  // registration as micro-bars on the tail cone — the engine has no
+  // text, so lettering is faked with five small dark blocks that
+  // read as characters at chase distance.
   for (const sx of [-1, 1]) {
-    b.box(sx * 0.715, 1.10, 0, 0.03, 0.17, 2.2, TEAL);
+    b.box(sx * 0.715, 1.17, 0, 0.03, 0.26, 2.2, TEAL);
     for (let i = 0; i < 5; i++) b.box(sx * 0.335, 1.38, 2.58 + i * 0.115, 0.02, 0.15, 0.055, [0.25, 0.16, 0.12]);
   }
   // Main wing: tapered, swept and dihedralled in two sections a side,
@@ -192,19 +212,37 @@ export function buildPlane(R, spec) {
     b.box(sx * 4.1 * SPAN, 1.762, -0.46, 0.045, 0.018, 1.15, [0.55, 0.48, 0.38]);
   }
   // Detailing (v16): the airframe finished like a product, not a
-  // prototype. A gold pinstripe rides a hair above the cheatline in
-  // the cheatline's own proven placement; four cabin windows a side
-  // sit in the flank under the wing, each at its section's own half
-  // width, with the cream between them reading as pillars; a rivet
-  // row stitches the lower flank, dot by dot at the interpolated
-  // skin line; two pale sheen plates step up the glasshouse roof so
-  // the canopy catches the sky the way the cockpit glass does; the
-  // wings gain polished leading-edge strips and a third seam.
-  const WIN16 = [0.13, 0.22, 0.30], SEAM16 = [0.55, 0.48, 0.38];
+  // prototype. A rivet row stitches the lower flank, dot by dot at
+  // the interpolated skin line; two pale sheen plates step up the
+  // glasshouse roof so the canopy catches the sky the way the
+  // cockpit glass does; the wings gain polished leading-edge strips
+  // and a third seam.
+  const SEAM16 = [0.55, 0.48, 0.38];
+  // The window line (v18): as many panes as her seats say — the
+  // count comes from the airframe spec (4 on the starter, 10 on
+  // the Bangau), each pane framed in lightened body colour, glazed
+  // in blue-tinted glass with a glint along its top edge, seated on
+  // the flank's own half width at its station. The gold pinstripe
+  // rides just above the line now and the cheatline band below it,
+  // so the livery reads THROUGH the windows like a real scheme.
+  const WINN = Math.max(2, Math.round(spec ? (spec.win || 4) : 4));
+  const halfW = (z) => {
+    const S = [[-2.30, 0.55], [-1.20, 0.67], [0.90, 0.73], [2.30, 0.53]];
+    for (let i = 1; i < S.length; i++) {
+      if (z <= S[i][0]) { const [z0, w0] = S[i - 1], [z1, w1] = S[i]; return w0 + (w1 - w0) * ((z - z0) / (z1 - z0)); }
+    }
+    return 0.53;
+  };
+  const frameC = CREAM.map(c => Math.min(1, c * 1.14 + 0.03));
+  const paneD = Math.min(0.36, (1.8 / WINN) * 0.55);
   for (const sx of [-1, 1]) {
-    b.box(sx * 0.715, 1.235, 0, 0.03, 0.035, 2.2, [1.18, 0.88, 0.30]); // pinstripe
-    for (const [wz, hx] of [[-0.95, 0.685], [-0.45, 0.71], [0.05, 0.725], [0.55, 0.735]]) {
-      b.box(sx * hx, 1.37, wz, 0.04, 0.24, 0.36, WIN16); // cabin window
+    b.box(sx * 0.715, 1.52, 0, 0.03, 0.035, 2.2, [1.18, 0.88, 0.30]); // pinstripe, above the line
+    for (let i = 0; i < WINN; i++) {
+      const wz = -1.05 + (1.8 * i) / (WINN - 1);
+      const hx = halfW(wz);
+      b.box(sx * (hx + 0.001), 1.37, wz, 0.03, 0.31, paneD + 0.07, frameC); // the frame
+      b.box(sx * (hx + 0.008), 1.37, wz, 0.04, 0.24, paneD, [0.15, 0.26, 0.37]); // the glass
+      b.box(sx * (hx + 0.010), 1.475, wz, 0.045, 0.03, paneD * 0.9, [0.62, 0.78, 0.92]); // the glint
     }
     const rivW = (z) => z < -0.1 ? 1.36 + (z + 1.2) * 0.055 : z < 0.9 ? 1.42 + (z + 0.1) * 0.04 : 1.46 - (z - 0.9) * 0.286;
     for (let i = 0; i < 12; i++) {
@@ -220,6 +258,43 @@ export function buildPlane(R, spec) {
   }
   b.box(0.16, 1.918, -1.02, 0.30, 0.022, 0.78, [0.58, 0.72, 0.86]); // canopy sheen, front plate
   b.box(0.16, 1.950, -0.10, 0.30, 0.022, 0.78, [0.58, 0.72, 0.86]); // canopy sheen, rear plate
+  // Detailing (v18): the amphibious truths. A keel band along the
+  // belly in darkened body colour, the red belly beacon, a ventral
+  // antenna blade, a pitot under the STARBOARD wing to mirror the
+  // port one, and a rear door outlined on each flank — frame proud
+  // of the skin, panel inset, handle bright.
+  const BELLY = CREAM.map(c => c * 0.78);
+  b.box(0, 0.44, 0.10, 1.02, 0.10, 2.60, BELLY); // keel band
+  b.box(0, 0.40, 0.55, 0.10, 0.06, 0.10, [1.7, 0.25, 0.15]); // belly beacon
+  b.frustum(0, 0.42, -0.55, 0.05, 0.22, 0.16, 2.0, METAL); // ventral antenna
+  b.box(1.85 * SPAN, 1.30, -0.95, 0.05, 0.05, 0.55, METAL); // pitot, starboard wing
+  for (const sx of [-1, 1]) {
+    const dhx = halfW(1.35);
+    b.box(sx * (dhx + 0.004), 1.05, 1.35, 0.025, 0.78, 0.62, frameC); // door frame
+    b.box(sx * (dhx + 0.008), 1.05, 1.35, 0.02, 0.70, 0.54, BELLY); // door panel
+    b.box(sx * (dhx + 0.014), 1.05, 1.02, 0.02, 0.05, 0.16, METAL); // door handle
+  }
+  // WHEELS (v18): she is an amphibian — each float carries a main
+  // wheel on a short strut at the planing step and a smaller bow
+  // wheel forward, dark tyres with metal hub discs on the outer
+  // faces, every sole resting exactly on the fleet ground line
+  // (float keel −0.62), so she stands on the apron on rubber AND
+  // floats on the water on her hulls, the way the real ones do.
+  const TYRE = [0.13, 0.12, 0.11];
+  for (const sx of [-1.18, 1.18]) {
+    const out = sx + Math.sign(sx) * 0.16;
+    beam(b, [sx, -0.18, -0.05], [out, -0.33, -0.05], 0.09, METAL); // main strut
+    b.box(out, -0.35, -0.05, 0.20, 0.54, 0.54, TYRE); // main wheel, sole at −0.62
+    b.box(out + Math.sign(sx) * 0.085, -0.35, -0.05, 0.05, 0.24, 0.24, METAL); // main hub
+    beam(b, [sx, -0.20, -1.55], [out, -0.42, -1.55], 0.07, METAL); // bow strut
+    b.box(out, -0.44, -1.55, 0.16, 0.36, 0.36, TYRE); // bow wheel, sole at −0.62
+    b.box(out + Math.sign(sx) * 0.065, -0.44, -1.55, 0.04, 0.16, 0.16, METAL); // bow hub
+  }
+  // The body's measure (v18): length and beam from the airframe
+  // spec, scaled about the prop pivot — the fleet's size ladder is
+  // geometry, not paint. Applied last so every part above, wheels
+  // and windows included, takes the same measure.
+  reshape(b, spec ? (spec.beam || 1) : 1, spec ? (spec.len || 1) : 1, -3.42);
   const plane = R.makeMesh(b);
   // Propeller: tapered blades (a wide root pair and a narrower tip pair
   // on each axis), a metal backplate and a proper spinner cone, all spun
@@ -310,20 +385,29 @@ export function buildFighter(R, spec) {
   b.box(5.60 * SPAN, 0.78, -0.60, 0.26, 0.12, 0.26, [0.20, 1.50, 0.35]);
   b.box(0, 3.14, 3.48, 0.18, 0.11, 0.18, [1.5, 1.5, 1.4]);
   b.box(0, 0.50, -3.30, 0.30, 0.12, 0.14, [1.9, 1.8, 1.5]);
-  // Fixed gear: two faired legs raked out from the wing roots to
-  // spatted wheels, and a small tail wheel — she is a landplane and
-  // stands like one. Main soles at y = -0.62, the fleet ground line.
+  // Fixed gear (v18): bigger mains with hub caps and spats, and
+  // the tail wheel finally STANDING on the ground line — the v17
+  // wheel hovered (its box bottom sat at +0.10, three-quarters of
+  // a metre over the strip); a longer leg and a taller wheel put
+  // its sole at −0.62 with the mains, a proper taildragger stance.
   for (const sx of [-1, 1]) {
     beam(b, [sx * 0.52, 0.58, -0.72], [sx * 1.04, -0.28, -0.80], 0.13, BODY);
-    b.box(sx * 1.04, -0.40, -0.80, 0.20, 0.44, 0.46, RUBBER); // main wheel
-    b.box(sx * 1.04, -0.40, -0.80, 0.225, 0.20, 0.20, METAL); // hub
-    b.box(sx * 0.98, -0.06, -0.80, 0.10, 0.30, 0.40, BODY); // spat over the leg's foot
+    b.box(sx * 1.04, -0.34, -0.80, 0.24, 0.56, 0.58, RUBBER); // main wheel, sole at −0.62
+    b.box(sx * 1.04 + sx * 0.10, -0.34, -0.80, 0.06, 0.26, 0.26, METAL); // hub cap
+    b.box(sx * 0.98, -0.02, -0.80, 0.10, 0.34, 0.46, BODY); // spat over the leg's foot
   }
-  beam(b, [0, 1.06, 3.28], [0, 0.30, 3.42], 0.07, METAL); // tail-wheel leg
-  b.box(0, 0.20, 3.44, 0.11, 0.20, 0.22, RUBBER); // tail wheel
+  beam(b, [0, 1.02, 3.30], [0, -0.36, 3.44], 0.07, METAL); // tail-wheel leg, reaching down
+  b.box(0, -0.50, 3.44, 0.13, 0.24, 0.26, RUBBER); // tail wheel, sole at −0.62
   // Aerial mast and wire, pitot's mirror: the small truths.
   b.box(0, 1.86, 1.55, 0.05, 0.26, 0.05, METAL);
   beam(b, [0, 1.98, 1.55], [0, 3.02, 3.40], 0.016, [0.10, 0.10, 0.11]);
+  // Canopy framing and the gunsight (v18): a hoop over the bubble
+  // at each end in body colour, a gunsight nub on the nose at the
+  // windscreen's base, and a ventral antenna blade under the tail.
+  b.box(0, 1.86, -0.80, 0.64, 0.06, 0.07, BODY); // canopy front hoop
+  b.box(0, 1.90, 0.55, 0.66, 0.06, 0.07, BODY); // canopy rear hoop
+  b.box(0, 1.54, -1.05, 0.07, 0.16, 0.07, [0.12, 0.12, 0.12]); // gunsight nub
+  b.frustum(0, 0.78, 2.20, 0.05, 0.20, 0.15, 2.0, METAL); // ventral antenna
   const plane = R.makeMesh(b);
   const prop = buildPropMesh(R);
   const d = new Builder();
@@ -496,6 +580,7 @@ export function buildIsland(R, isl, scale = 1) {
   fan(shore, 0.25, SAND);                                   // the beach itself
   strip(shore, 0.16, wet, 0.10, [0.80, 0.64, 0.42]);         // wet sand at the waterline
   strip(wet, 0.05, foamL, 0.02, FOAM);                      // the foam line, in the water
+  strip(foamL, 0.018, scaled(1.24), 0.012, [0.90, 0.90, 0.84]); // a second, fainter foam skiff further out (v18)
   strip(shore, 0.25, scaled(1.03), -1.3, [0.72, 0.58, 0.38]); // the island's bank into the sea
   // Terraces climb inland in the island's own greens — lush in the
   // west of the chain, dry savanna toward the east (isl.veg).
@@ -648,8 +733,13 @@ export function buildIsland(R, isl, scale = 1) {
   const vrnd = mulberry32(isl.seed * 13 + 5);
   const tuftA = [g1[0] * 0.85 + 0.08, g1[1] * 0.92, g1[2] * 0.8], tuftB = [g2[0] * 0.9 + 0.06, g2[1] * 0.95, g2[2] * 0.85];
   const midPts = scaled(0.66);
+  // Vegetation density varies by island (v18): the ring's skip
+  // chance is hashed from the island's own seed on a THIRD stream,
+  // so some islands climb lush and others stay sparse — and still
+  // no palm, house or rock on the main stream moves.
+  const palmSkip = 0.40 + mulberry32(isl.seed * 29 + 11)() * 0.30;
   for (let i = 0; i < midPts.length; i += 2) {
-    if (vrnd() < 0.55) continue;
+    if (vrnd() < palmSkip) continue;
     const [wx, wz] = W(midPts[i]);
     palm(b, wx, wz, (3.0 + vrnd() * 1.8) * scale, vrnd, 1.65);
   }
@@ -1428,39 +1518,51 @@ export function buildJet(R) {
     b.box(sx * 0.19, cy + 5.30, 10.95, 0.03, 1.30, 2.6, [0.78, 0.14, 0.16]); // red
     b.box(sx * 0.19, cy + 3.95, 11.95, 0.03, 1.15, 1.7, [0.08, 0.08, 0.09]); // black
   }
-  // Gear suggestion: three bogies — she sits ON the deck at alt 0, so
-  // the bogies' bottoms ride at the floats' old -0.62 keel line.
-  for (const [gx, gz] of [[0, -8.6], [-1.15, 1.4], [1.15, 1.4]]) {
-    b.box(gx, -0.05, gz, 0.5, 1.1, 1.5, [0.20, 0.20, 0.22]);
+  // Gear (v18): a real tricycle where the early builds suggested
+  // bogies with plain boxes — a nose strut carrying twin wheels,
+  // and two main bogies, each a beam on two axles of twin wheels.
+  // Every sole rests on the fleet ground line −0.62.
+  const JTYRE = [0.13, 0.12, 0.11];
+  beam(b, [0, 0.48, -8.6], [0, -0.30, -8.6], 0.16, METAL); // nose strut
+  b.box(-0.14, -0.44, -8.6, 0.16, 0.36, 0.36, JTYRE); // nose wheel, port
+  b.box(0.14, -0.44, -8.6, 0.16, 0.36, 0.36, JTYRE); // nose wheel, starboard
+  for (const sx of [-1.15, 1.15]) {
+    beam(b, [sx, 0.48, 1.4], [sx, -0.18, 1.4], 0.20, METAL); // main strut
+    b.box(sx, -0.20, 1.4, 0.14, 0.10, 1.70, METAL); // bogie beam
+    for (const az of [0.85, 1.95]) {
+      b.box(sx - 0.15, -0.43, az, 0.15, 0.38, 0.38, JTYRE); // twin wheel, inboard
+      b.box(sx + 0.15, -0.43, az, 0.15, 0.38, 0.38, JTYRE); // twin wheel, outboard
+    }
   }
-  // Detailing (v14): individual window panes along the band — small
-  // pale lights that catch the sky and break the dark strip into a
-  // cabin — a wing-root fairing, a nose-gear door, the APU exhaust at
-  // the tail cone and a darker radome tip. The cues that separate an
-  // airliner from a white tube at dossier distance.
+  // Detailing (v14): a wing-root fairing, a nose-gear door, the APU
+  // exhaust at the tail cone and a darker radome tip. The cues that
+  // separate an airliner from a white tube at dossier distance.
+  // (The window panes that began here are v18's now — one unbroken
+  // line of twenty-one a side, in the block below.)
   for (const sx of [-1, 1]) {
-    for (let i = 0; i < 11; i++) b.box(sx * 2.06, cy + 0.95, -8.0 + i * 1.5, 0.06, 0.34, 0.52, [0.85, 0.92, 1.05]);
     b.box(sx * 2.6, 1.05, 0.6, 3.2, 0.5, 4.2, WHITE); // wing-root fairing
   }
   b.box(0, 0.42, -8.6, 0.62, 0.22, 1.7, [0.88, 0.88, 0.90]); // nose gear door
   b.box(0, cy + 1.6, 13.15, 0.4, 0.32, 0.45, [0.25, 0.24, 0.26]); // APU exhaust
   b.box(0, cy - 0.3, -13.35, 0.52, 0.52, 0.4, [0.30, 0.30, 0.34]); // radome tip
-  // Detailing (v16): the flagship finished to airliner standard. The
-  // window band fills out to fifteen panes a side; the upper deck
-  // gets its own small windows along the hump, each at the hump's
-  // local half width; two passenger doors a side are outlined in a
-  // shade off the white with their own window dots; every intake
-  // wears a machined lip ring and a spinner dot; flap-track canoes
-  // hang under the outer wing; and the registration is micro-barred
-  // on the tail cone, the fleet's signature at flag scale.
+  // Detailing (v16, extended v18): the flagship finished to
+  // airliner standard. Intake lip rings and spinner dots (v16),
+  // flap-track canoes, the registration micro-barred on the tail
+  // cone — and the v18 window and door work: TWENTY-ONE panes a
+  // side on the main deck (her 180 seats made visible — the v14/
+  // v16 loops drew fifteen boxes over eleven stations), six small
+  // panes on the upper deck placed on the hump's own crown line,
+  // and THREE doors a side, their slabs recessed a hair under the
+  // pane line so the windows read over them.
   for (const sx of [-1, 1]) {
-    for (let i = 0; i < 4; i++) b.box(sx * 2.06, cy + 0.95, 1.0 + i * 1.5, 0.06, 0.34, 0.52, [0.85, 0.92, 1.05]); // panes aft of the wing
-    for (const [uz, ux] of [[-9.6, 1.04], [-8.5, 1.13], [-7.4, 1.22], [-6.3, 1.30]]) {
-      b.box(sx * ux, cy + 2.02, uz, 0.05, 0.26, 0.42, [0.85, 0.92, 1.05]); // upper-deck window
+    for (let i = 0; i < 21; i++) b.box(sx * 2.06, cy + 0.95, -8.3 + i * 0.83, 0.06, 0.34, 0.52, [0.85, 0.92, 1.05]); // main-deck panes
+    for (let i = 0; i < 6; i++) {
+      const uz = -10.2 + i * 0.9, t = (uz + 11.4) / 6;
+      b.box(sx * (0.855 + 0.45 * t), cy + 2.02 + 0.50 * t, uz, 0.05, 0.26, 0.42, [0.85, 0.92, 1.05]); // upper-deck pane, on the crown
     }
-    for (const dz of [-8.9, 7.6]) {
-      b.box(sx * 2.05, cy + 0.30, dz, 0.05, 1.55, 0.85, [0.84, 0.84, 0.86]); // door slab
-      b.box(sx * 2.08, cy + 0.78, dz, 0.04, 0.30, 0.40, [0.85, 0.92, 1.05]); // its window
+    for (const dz of [-9.4, -0.6, 8.8]) {
+      b.box(sx * 2.02, cy + 0.30, dz, 0.05, 1.55, 0.85, [0.84, 0.84, 0.86]); // door slab
+      b.box(sx * 2.05, cy + 0.78, dz, 0.04, 0.30, 0.40, [0.85, 0.92, 1.05]); // its window
     }
     for (const [ex, ez] of [[3.8, 1.0], [7.6, 2.6]]) {
       ringXY(b, sx * ex, cy - 2.0, ez - 2.44, 0.50, 0.66, 12, [0.38, 0.41, 0.46]); // intake lip ring
@@ -1471,6 +1573,12 @@ export function buildJet(R) {
     }
     for (let i = 0; i < 5; i++) b.box(sx * 1.38, cy + 1.30, 10.35 + i * 0.15, 0.03, 0.20, 0.07, [0.30, 0.28, 0.30]); // registration bars
   }
+  // The crown furniture (v18): a satcom dome fairing over the main
+  // cabin and two antenna blades along the tail cone — the roofline
+  // a bare white tube is missing.
+  b.frustum(0, cy + 2.62, -1.5, 1.5, 0.5, 2.6, 0.55, WHITE); // satcom dome
+  b.frustum(0, cy + 2.45, 6.5, 0.08, 0.7, 0.9, 0.4, WHITE); // tail antenna blade, forward
+  b.frustum(0, cy + 2.45, 9.0, 0.08, 0.6, 0.8, 0.4, WHITE); // tail antenna blade, aft
   const plane = R.makeMesh(b);
   // No propeller: an empty mesh keeps the scene's prop draws harmless.
   const empty = R.makeMesh(new Builder());

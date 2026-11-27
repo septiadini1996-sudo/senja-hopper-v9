@@ -71,11 +71,13 @@ export function radioEngine(g) {
 
 // The radio colour of a spoken call: pitch dipped and pace eased a
 // touch below conversational, per speaker — the tower sits lowest,
-// the pilot a shade brighter, the boat's keeper in between.
+// the pilot a shade brighter, the boat's keeper in between. The
+// rates eased again in v18 (tower 0.93 → 0.90): a slower tower is
+// a clearer tower, and clarity was the owner's whole ask.
 export function radioSpeechParams(speaker) {
-  if (speaker === 'pilot') return { pitch: 0.95, rate: 0.97 };
-  if (speaker === 'boat') return { pitch: 0.88, rate: 0.94 };
-  return { pitch: 0.85, rate: 0.93 }; // tower
+  if (speaker === 'pilot') return { pitch: 0.95, rate: 0.95 };
+  if (speaker === 'boat') return { pitch: 0.88, rate: 0.92 };
+  return { pitch: 0.85, rate: 0.90 }; // tower
 }
 
 // How long a spoken transmission keeps the channel: words at a

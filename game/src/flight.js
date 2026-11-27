@@ -524,6 +524,11 @@ export function settleFlight(s, ticket, fuelLvl, planeClass) {
   }
   // Mission bonuses (v12): each type pays for the thing it asked for.
   const type = ticket.type || 'cargo';
+  // The per-pax line (v18): a passenger ticket's face IS its group
+  // math — the receipt shows the multiplication, not just the total.
+  if (type === 'passenger' && typeof ticket.pax === 'number' && typeof ticket.fare === 'number') {
+    lines[0].pax = ticket.pax; lines[0].fare = ticket.fare;
+  }
   const comfort = type === 'passenger' ? comfortOf(s) : null;
   if (comfort !== null && comfort >= 0.55) {
     lines.push({ k: 'comfort', amt: Math.round(ticket.pay * 0.25 * comfort) });
