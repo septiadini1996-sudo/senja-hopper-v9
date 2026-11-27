@@ -1383,7 +1383,11 @@ function banditFire(m, p, esc, sol) {
   if (dmg <= 0) return;
   p.hp = Math.max(0, p.hp - dmg);
   p.hurtAge = 0;
-  ctx.sparks.push({ x: f.x, altM: f.alt + 0.6, dist: f.dist, t0: ambient });
+  // A strike throws a CLUSTER now (v16): three spark cores fanned
+  // around the hit point, so a landed burst reads as a burst.
+  for (const [ox, oy] of [[0, 0], [0.9, 0.5], [-0.8, 0.9]]) {
+    ctx.sparks.push({ x: f.x + ox, altM: f.alt + 0.6 + oy, dist: f.dist, t0: ambient });
+  }
   audio.blip('hit');
   if (p.hp <= 0) shotDown(m, p);
 }
@@ -1406,7 +1410,10 @@ function damageTarget(m, p, tgt) {
   const ctx = flightCtx;
   p.hits += 1;
   audio.blip('hit');
-  ctx.sparks.push({ x: tgt.x, altM: tgt.altM, dist: tgt.dist, t0: ambient });
+  // A cluster of spark cores at the strike (v16), fanned like hers.
+  for (const [ox, oy] of [[0, 0], [0.9, 0.5], [-0.8, 0.9]]) {
+    ctx.sparks.push({ x: tgt.x + ox, altM: tgt.altM + oy, dist: tgt.dist, t0: ambient });
+  }
   if (applyGunDamage(tgt, GUN_DMG)) {
     p.downed += 1;
     if (tgt.kind === 'escort') { p.banditsDown += 1; p.score += ESCORT_POINTS; }
@@ -1484,10 +1491,13 @@ function stepMode(dt) {
         ctx.smokes.push({ x: f.x, altM: f.alt + 0.5, dist: f.dist - 5, t0: ambient, heavy: p.hp < 40 });
       }
     }
-    // The fight's light ages out fast; the smoke lingers a breath.
-    ctx.tracers = ctx.tracers.filter(x => ambient - x.t0 < 0.14);
-    ctx.flashes = ctx.flashes.filter(x => ambient - x.t0 < 0.12);
-    ctx.sparks = ctx.sparks.filter(x => ambient - x.t0 < 0.35);
+    // The fight's light (v16): tracers now live long enough to read
+    // as streams — the scene holds them 0.27 s, the ledger keeps
+    // them a breath past that — and sparks linger half a second.
+    // The smoke still lingers longest of all.
+    ctx.tracers = ctx.tracers.filter(x => ambient - x.t0 < 0.30);
+    ctx.flashes = ctx.flashes.filter(x => ambient - x.t0 < 0.16);
+    ctx.sparks = ctx.sparks.filter(x => ambient - x.t0 < 0.50);
     ctx.smokes = ctx.smokes.filter(x => ambient - x.t0 < 1.7);
     if (p.left <= 0) endModeFlight('time');
   } else if (m.kind === 'rush') {
@@ -2003,8 +2013,8 @@ if (R) {
     destShallows: buildDestShallows(R),
     boom: buildExplosion(R),
     drone: buildDrone(R),
-    tracerOwn: buildTracer(R, [3.4, 2.3, 0.9]),
-    tracerEnemy: buildTracer(R, [3.6, 0.55, 0.45]),
+    tracerOwn: buildTracer(R, [4.0, 2.7, 1.0]),
+    tracerEnemy: buildTracer(R, [4.2, 0.7, 0.5]),
     flash: buildFlash(R),
     bird: buildBird(R),
     beacon: buildBeacon(R),

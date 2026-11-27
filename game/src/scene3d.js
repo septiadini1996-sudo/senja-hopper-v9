@@ -191,6 +191,35 @@ export function buildPlane(R, spec) {
     b.box(sx * 1.6 * SPAN, 1.66, -0.30, 0.045, 0.018, 1.55, [0.55, 0.48, 0.38]);
     b.box(sx * 4.1 * SPAN, 1.762, -0.46, 0.045, 0.018, 1.15, [0.55, 0.48, 0.38]);
   }
+  // Detailing (v16): the airframe finished like a product, not a
+  // prototype. A gold pinstripe rides a hair above the cheatline in
+  // the cheatline's own proven placement; four cabin windows a side
+  // sit in the flank under the wing, each at its section's own half
+  // width, with the cream between them reading as pillars; a rivet
+  // row stitches the lower flank, dot by dot at the interpolated
+  // skin line; two pale sheen plates step up the glasshouse roof so
+  // the canopy catches the sky the way the cockpit glass does; the
+  // wings gain polished leading-edge strips and a third seam.
+  const WIN16 = [0.13, 0.22, 0.30], SEAM16 = [0.55, 0.48, 0.38];
+  for (const sx of [-1, 1]) {
+    b.box(sx * 0.715, 1.235, 0, 0.03, 0.035, 2.2, [1.18, 0.88, 0.30]); // pinstripe
+    for (const [wz, hx] of [[-0.95, 0.685], [-0.45, 0.71], [0.05, 0.725], [0.55, 0.735]]) {
+      b.box(sx * hx, 1.37, wz, 0.04, 0.24, 0.36, WIN16); // cabin window
+    }
+    const rivW = (z) => z < -0.1 ? 1.36 + (z + 1.2) * 0.055 : z < 0.9 ? 1.42 + (z + 0.1) * 0.04 : 1.46 - (z - 0.9) * 0.286;
+    for (let i = 0; i < 12; i++) {
+      const rz = -1.05 + i * 0.30;
+      b.box(sx * (rivW(rz) / 2 + 0.004), 0.88, rz, 0.02, 0.045, 0.045, [0.45, 0.36, 0.28]); // rivet
+    }
+    // Polished leading edges: a thin bright prism wrapped over each
+    // wing section's nose, and a spanwise seam stitched behind it.
+    segX(b, 0, 0.14, 0.185, 1.52, -1.155, sx * 3.2 * SPAN, 0.14, 0.155, 1.64, -1.105, [1.05, 0.98, 0.82]);
+    segX(b, sx * 3.2 * SPAN, 0.14, 0.155, 1.64, -1.105, sx * 5.05 * SPAN, 0.14, 0.13, 1.76, -1.04, [1.05, 0.98, 0.82]);
+    segX(b, sx * 0.3 * SPAN, 0.05, 0.018, 1.615, -0.18, sx * 3.15 * SPAN, 0.05, 0.018, 1.715, -0.28, SEAM16);
+    b.box(sx * 2.9 * SPAN, 1.70, -0.39, 0.045, 0.018, 1.42, SEAM16);
+  }
+  b.box(0.16, 1.918, -1.02, 0.30, 0.022, 0.78, [0.58, 0.72, 0.86]); // canopy sheen, front plate
+  b.box(0.16, 1.950, -0.10, 0.30, 0.022, 0.78, [0.58, 0.72, 0.86]); // canopy sheen, rear plate
   const plane = R.makeMesh(b);
   // Propeller: tapered blades (a wide root pair and a narrower tip pair
   // on each axis), a metal backplate and a proper spinner cone, all spun
@@ -203,6 +232,14 @@ export function buildPlane(R, spec) {
   for (let i = 0; i < SEG; i++) {
     const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
     d.tri([0, 0, 0], [Math.cos(a0) * 2.18, Math.sin(a0) * 2.18, 0], [Math.cos(a1) * 2.18, Math.sin(a1) * 2.18, 0], [0.25, 0.2, 0.16]);
+  }
+  // The blur's rim (v16): a brighter annulus where the blade tips
+  // sweep — a spinning prop reads by its tip arc, and the flat disc
+  // alone read as a grey plate at dossier distance.
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    const p = (a, r) => [Math.cos(a) * r, Math.sin(a) * r, 0];
+    d.quad(p(a0, 1.98), p(a1, 1.98), p(a1, 2.18), p(a0, 2.18), [0.46, 0.38, 0.28]);
   }
   const disc = R.makeMesh(d);
   return { plane, prop, disc };
@@ -506,6 +543,37 @@ export function buildIsland(R, isl, scale = 1) {
     b.box(ux, 0.25 + 0.55 * scale, uz, 0.09 * scale, 1.1 * scale, 0.09 * scale, [0.45, 0.38, 0.32]); // umbrella pole
     b.cone(ux, 0.25 + 1.05 * scale, uz, 1.55 * scale, 0.55 * scale, 7, off < 0 ? [1.0, 0.72, 0.0] : [1.0, 0.25, 0.55]); // its canopy
   }
+  // Detailing (v16) on its OWN seed stream again, so every palm,
+  // house and rock above keeps its exact place: a second palm ring
+  // climbs to the middle terrace, grass tufts stitch the terrace
+  // edges, beach scrub thickens along the sand, and two cargo crates
+  // wait by the town jetty — the islands read inhabited and grown,
+  // not landscaped, on the approach.
+  const vrnd = mulberry32(isl.seed * 13 + 5);
+  const tuftA = [g1[0] * 0.85 + 0.08, g1[1] * 0.92, g1[2] * 0.8], tuftB = [g2[0] * 0.9 + 0.06, g2[1] * 0.95, g2[2] * 0.85];
+  const midPts = scaled(0.66);
+  for (let i = 0; i < midPts.length; i += 2) {
+    if (vrnd() < 0.55) continue;
+    const [wx, wz] = W(midPts[i]);
+    palm(b, wx, wz, (3.0 + vrnd() * 1.8) * scale, vrnd, 1.65);
+  }
+  for (const [ringK, ringY] of [[0.90, 0.42], [0.72, 1.28], [0.52, 2.28]]) {
+    const ring = scaled(ringK);
+    for (let i = 0; i < ring.length; i++) {
+      if (vrnd() < 0.62) continue;
+      const [tx, tz] = W(ring[i]);
+      b.cone(tx, ringY, tz, (0.30 + vrnd() * 0.22) * scale, (0.42 + vrnd() * 0.3) * scale, 5, vrnd() < 0.5 ? tuftA : tuftB); // grass tuft
+    }
+  }
+  const beachPts = scaled(0.95);
+  for (let i = 0; i < beachPts.length; i += 2) {
+    if (vrnd() < 0.5) continue;
+    const [bx, bz] = W(beachPts[i]);
+    b.cone(bx, 0.25, bz, (0.7 + vrnd() * 0.5) * scale, (0.6 + vrnd() * 0.45) * scale, 6, vrnd() < 0.5 ? bushA : bushB); // beach scrub
+  }
+  const [cx2, cz2] = W([ax + (jp[0] - ax) * 1.06, ay + (jp[1] - ay) * 1.06]);
+  b.box(cx2 + 1.1 * scale, 0.55, cz2, 1.0 * scale, 0.6 * scale, 1.0 * scale, [0.62, 0.45, 0.28]); // jetty crate
+  b.box(cx2 + 1.05 * scale, 1.12, cz2, 0.8 * scale, 0.5 * scale, 0.8 * scale, [0.50, 0.38, 0.24]); // crate stacked
   return R.makeMesh(b);
 }
 
@@ -997,6 +1065,18 @@ export function buildAirport(R) {
   b.box(24, 0.10, 9.6, 0.16, 0.12, 2.2, [0.55, 0.56, 0.60]); // tow bar
   b.box(28, 8.78, -6, 3.0, 0.85, 2.0, [0.60, 0.62, 0.65]); b.box(40, 8.78, -4, 2.2, 0.85, 1.6, [0.60, 0.62, 0.65]); // roof plant
   b.box(46, 20.45, 8, 0.12, 1.3, 0.12, [0.40, 0.40, 0.44]); b.box(46, 21.15, 8, 0.3, 0.22, 0.3, [1.9, 0.35, 0.28]); // tower antenna + tip light
+  // Detailing (v16): the apron's edge learns its manners — a row of
+  // small warm edge lights along the terminal front so the stand
+  // line glows after dark, lit windows in both hangar doors, a
+  // windsock-orange cone pair marking the fuel farm's corner, and
+  // a second service van parked at the cargo shed, so the field's
+  // working fleet is not one van doing every job.
+  for (let i = 0; i < 7; i++) b.box(21 + i * 4.3, 0.28, -17.8, 0.34, 0.34, 0.34, [2.2, 1.75, 0.95]); // apron edge lights
+  b.box(21.5, 2.6, 11.62, 1.6, 1.1, 0.16, WIN); b.box(26.5, 2.6, 11.62, 1.6, 1.1, 0.16, WIN); // hangar 1 door windows
+  b.box(14, 2.5, 29.12, 1.6, 1.1, 0.16, WIN); // hangar 2 door window
+  b.cone(51.5, 0.02, -29.5, 0.42, 0.8, 6, [0.95, 0.48, 0.12]); b.cone(64.5, 0.02, -29.5, 0.42, 0.8, 6, [0.95, 0.48, 0.12]); // fuel farm corner cones
+  b.box(44.5, 0.85, 27.5, 4.8, 1.7, 2.1, [0.85, 0.83, 0.78]); // the second van, at the shed
+  b.box(44.5, 1.15, 25.2, 4.3, 0.9, 1.4, [0.30, 0.36, 0.42]); // its cab
   return R.makeMesh(b);
 }
 
@@ -1066,6 +1146,15 @@ export function buildFlash(R) {
   b.box(0, 0, 0, 1.9, 0.16, 0.16, HOT);
   b.box(0, 0, 0, 0.16, 1.9, 0.16, HOT);
   b.box(0, 0, -0.3, 0.5, 0.5, 1.1, CORE);
+  // The bloom grows (v16): longer arms, a fatter core and four
+  // diagonal sparklets thrown off the star — a muzzle flash that
+  // reads at chase distance instead of winking at the nose.
+  b.box(0, 0, 0, 2.7, 0.11, 0.11, HOT);
+  b.box(0, 0, 0, 0.11, 2.7, 0.11, HOT);
+  b.box(0, 0, -0.3, 0.68, 0.68, 1.5, CORE);
+  for (const [sx, sy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    b.box(sx * 0.85, sy * 0.85, -0.1, 0.30, 0.30, 0.30, HOT);
+  }
   return R.makeMesh(b);
 }
 
@@ -1260,6 +1349,32 @@ export function buildJet(R) {
   b.box(0, 0.42, -8.6, 0.62, 0.22, 1.7, [0.88, 0.88, 0.90]); // nose gear door
   b.box(0, cy + 1.6, 13.15, 0.4, 0.32, 0.45, [0.25, 0.24, 0.26]); // APU exhaust
   b.box(0, cy - 0.3, -13.35, 0.52, 0.52, 0.4, [0.30, 0.30, 0.34]); // radome tip
+  // Detailing (v16): the flagship finished to airliner standard. The
+  // window band fills out to fifteen panes a side; the upper deck
+  // gets its own small windows along the hump, each at the hump's
+  // local half width; two passenger doors a side are outlined in a
+  // shade off the white with their own window dots; every intake
+  // wears a machined lip ring and a spinner dot; flap-track canoes
+  // hang under the outer wing; and the registration is micro-barred
+  // on the tail cone, the fleet's signature at flag scale.
+  for (const sx of [-1, 1]) {
+    for (let i = 0; i < 4; i++) b.box(sx * 2.06, cy + 0.95, 1.0 + i * 1.5, 0.06, 0.34, 0.52, [0.85, 0.92, 1.05]); // panes aft of the wing
+    for (const [uz, ux] of [[-9.6, 1.04], [-8.5, 1.13], [-7.4, 1.22], [-6.3, 1.30]]) {
+      b.box(sx * ux, cy + 2.02, uz, 0.05, 0.26, 0.42, [0.85, 0.92, 1.05]); // upper-deck window
+    }
+    for (const dz of [-8.9, 7.6]) {
+      b.box(sx * 2.05, cy + 0.30, dz, 0.05, 1.55, 0.85, [0.84, 0.84, 0.86]); // door slab
+      b.box(sx * 2.08, cy + 0.78, dz, 0.04, 0.30, 0.40, [0.85, 0.92, 1.05]); // its window
+    }
+    for (const [ex, ez] of [[3.8, 1.0], [7.6, 2.6]]) {
+      ringXY(b, sx * ex, cy - 2.0, ez - 2.44, 0.50, 0.66, 12, [0.38, 0.41, 0.46]); // intake lip ring
+      discXY(b, sx * ex, cy - 2.0, ez - 2.44, 0.17, 10, [0.55, 0.58, 0.63]); // fan spinner
+    }
+    for (const [fx, fz] of [[5.5, 3.6], [7.5, 3.9], [9.5, 4.4]]) {
+      b.box(sx * fx, cy - 1.02, fz, 0.28, 0.22, 1.25, WHITE); // flap-track canoe
+    }
+    for (let i = 0; i < 5; i++) b.box(sx * 1.38, cy + 1.30, 10.35 + i * 0.15, 0.03, 0.20, 0.07, [0.30, 0.28, 0.30]); // registration bars
+  }
   const plane = R.makeMesh(b);
   // No propeller: an empty mesh keeps the scene's prop draws harmless.
   const empty = R.makeMesh(new Builder());
@@ -1348,6 +1463,8 @@ export function buildCloud(R) {
   b.box(-3.4, 1.9, 1.8, 4.6, 1.5, 3.6, W, CLOUD_SHADE); // a second crown shoulder
   b.box(5.9, 2.6, 1.2, 3.8, 1.3, 3.0, W, CLOUD_SHADE);
   b.box(-14.5, -0.5, 2.2, 3.2, 0.7, 2.4, W, CLOUD_SHADE); // a detached fragment, trailing low (v14)
+  b.box(-1.2, 4.15, -0.4, 2.6, 1.1, 2.4, W, CLOUD_SHADE); // the crown's dome (v16): the puff tops out round, not flat
+  b.box(3.4, 0.45, -3.4, 4.4, 0.9, 2.2, W, CLOUD_SHADE); // a low skirt trailing off the back (v16)
   return R.makeMesh(b);
 }
 export function buildCloudC(R) {
@@ -1378,6 +1495,8 @@ export function buildCloudB(R) {
   b.box(0.8, 1.1, -2.6, 5.0, 1.3, 3.0, W, CLOUD_SHADE);
   b.box(2.8, 2.2, 2.2, 4.2, 1.2, 2.8, W, CLOUD_SHADE);
   b.box(9.5, 2.8, -1.5, 3.0, 1.0, 2.6, W, CLOUD_SHADE); // a satellite turret, breaking away (v14)
+  b.box(-0.1, 5.55, -0.3, 2.4, 0.9, 2.2, W, CLOUD_SHADE); // the turret's cap (v16)
+  b.box(-3.1, 4.05, 1.4, 2.6, 1.0, 2.2, W, CLOUD_SHADE); // a shoulder boiling off the stack (v16)
   return R.makeMesh(b);
 }
 
@@ -1536,8 +1655,23 @@ export function buildCockpit(R) {
   // the left pane: real canopy glass never reflects in just one place.
   sb.quad([-0.62, 0.28, -2.83], [-0.10, 0.28, -2.83], [-0.30, -0.10, -2.83], [-0.80, -0.10, -2.83], [1.05, 1.10, 1.16]);
   sb.quad([-2.44, 0.55, -1.50], [-1.95, 0.72, -2.35], [-1.80, 0.10, -2.45], [-2.30, -0.05, -1.55], [1.05, 1.10, 1.16]);
+  // Gauge glints (v16): a soft diagonal sheen across the upper face
+  // of every dial, riding the streak mesh's translucency — glass
+  // over the instruments, not just over the view. The needle hub
+  // sits a hair prouder (PANEL.z + 0.035), so the sheen never
+  // covers the reading.
+  for (const g of GAUGES) {
+    sb.quad([g.x - g.r * 0.58, g.y + g.r * 0.60, fz + 0.006], [g.x + g.r * 0.28, g.y + g.r * 0.60, fz + 0.006],
+      [g.x - g.r * 0.02, g.y + g.r * 0.02, fz + 0.006], [g.x - g.r * 0.84, g.y + g.r * 0.02, fz + 0.006], [1.10, 1.16, 1.22]);
+  }
   const streak = R.makeMesh(sb);
-  return { frame, needle, blipDest: R.makeMesh(bd), blipRing: R.makeMesh(br), blipDrone: R.makeMesh(bx), glass, streak };
+  // The radar sweep (v16): a pale green wedge the scene rotates
+  // around the scope — a working radar breathes, and a still scope
+  // read as a sticker next to four live needles.
+  const swb = new Builder();
+  swb.tri([0, 0, 0], [0, RADAR.r * 0.96, 0], [RADAR.r * 0.32, RADAR.r * 0.90, 0], [0.40, 1.25, 0.62]);
+  const sweep = R.makeMesh(swb);
+  return { frame, needle, blipDest: R.makeMesh(bd), blipRing: R.makeMesh(br), blipDrone: R.makeMesh(bx), glass, streak, sweep };
 }
 
 // Draw the cockpit over the finished world: depth cleared, camera set
@@ -1552,6 +1686,7 @@ function drawCockpit(R, ck, st, proj) {
   for (const g of GAUGES) {
     R.draw(ck.needle, M4.compose(g.x, g.y, PANEL.z + 0.035, 0, 0, rd[g.id].needle));
   }
+  if (ck.sweep) R.draw(ck.sweep, M4.compose(RADAR.x, RADAR.y, RADAR.z + 0.006, 0, 0, -(st.time || 0) * 0.9), 0.50);
   const bl = radarBlips(st);
   R.draw(ck.blipDest, M4.compose(RADAR.x + bl.dest.nx * RADAR.r, RADAR.y + bl.dest.ny * RADAR.r, RADAR.z + 0.010, 0, 0, 0));
   if (bl.ring) R.draw(ck.blipRing, M4.compose(RADAR.x + bl.ring.nx * RADAR.r, RADAR.y + bl.ring.ny * RADAR.r, RADAR.z + 0.012, 0, 0, 0));
@@ -1559,7 +1694,7 @@ function drawCockpit(R, ck, st, proj) {
     R.draw(ck.blipDrone, M4.compose(RADAR.x + db.nx * RADAR.r, RADAR.y + db.ny * RADAR.r, RADAR.z + 0.014, 0, 0, 0));
   }
   R.draw(ck.glass, M4.ident(), 0.16);
-  R.draw(ck.streak, M4.ident(), 0.13);
+  R.draw(ck.streak, M4.ident(), 0.17);
 }
 
 // The scene keeps a spring-smoothed chase camera so the plane eases through
@@ -1933,28 +2068,38 @@ export function createScene(R, assets) {
         }
       }
     }
-    // Gunfire light (v15.2): tracer beams live for a tenth of a
-    // second — long enough for the eye to catch the line of a burst,
-    // hers and theirs alike — muzzle flashes bloom and die at the
-    // nose that fired, hits throw a short spark burst, and a hurt
-    // patrol trails smoke off her own wing.
+    // Gunfire light (v15.2, made unmissable v16): the owner's word
+    // was that a burst must read as a STREAM of light, not a blink —
+    // the v15.2 beams lived 0.11 s at 0.16 m across and two gates in
+    // a row never caught one in a screenshot. Now each tracer lives
+    // 0.27 s and is drawn twice, additively: a wide soft halo (0.62 m)
+    // under a hard bright core (0.24 m), holding full brightness for
+    // the first half of its life before it fades — at the patrol's
+    // 0.16 s fire cadence two or three beams hang in the air at once
+    // and the burst's line is simply THERE. Muzzle flashes bloom
+    // bigger and a breath longer; hit sparks burn larger, denser
+    // (three cores a strike, staged by main.js) and longer.
     if (st.tracers) {
       for (const tr of st.tracers) {
-        if (tr.age > 0.11) continue;
+        if (tr.age > 0.27) continue;
         const mesh = tr.enemy ? assets.tracerEnemy : assets.tracerOwn;
-        if (mesh) R.draw(mesh, beamM(tr.a, tr.b, 0.16), clamp(0.95 * (1 - tr.age / 0.11), 0, 0.95));
+        if (!mesh) continue;
+        const u = tr.age / 0.27;
+        const fade = u < 0.5 ? 1 : 1 - (u - 0.5) / 0.5;
+        R.draw(mesh, beamM(tr.a, tr.b, 0.62), 0.30 * fade, true);
+        R.draw(mesh, beamM(tr.a, tr.b, 0.24), 0.98 * fade, true);
       }
     }
     if (st.flashes && assets.flash) {
       for (const fl of st.flashes) {
-        if (fl.age > 0.09) continue;
-        R.draw(assets.flash, M4.compose(fl.p[0], fl.p[1], fl.p[2], 0, 0, st.time * 9 + fl.p[0], 0.55 + fl.age * 5), clamp(1 - fl.age / 0.09, 0, 1));
+        if (fl.age > 0.14) continue;
+        R.draw(assets.flash, M4.compose(fl.p[0], fl.p[1], fl.p[2], 0, 0, st.time * 9 + fl.p[0], 0.9 + fl.age * 6.5), clamp(1 - fl.age / 0.14, 0, 1), true);
       }
     }
     if (st.sparks && assets.boom) {
       for (const sp of st.sparks) {
-        if (sp.age > 0.3) continue;
-        R.draw(assets.boom.core, M4.compose(sp.x, sp.altM + 0.3, -sp.dist, 0, st.time * 2.1, 0, 0.14 + sp.age * 0.5), clamp(0.9 * (1 - sp.age / 0.3), 0, 0.9));
+        if (sp.age > 0.45) continue;
+        R.draw(assets.boom.core, M4.compose(sp.x, sp.altM + 0.3, -sp.dist, 0, st.time * 2.1, 0, 0.20 + sp.age * 0.6), clamp(0.95 * (1 - sp.age / 0.45), 0, 0.95), true);
       }
     }
     if (st.smokes && assets.boom) {

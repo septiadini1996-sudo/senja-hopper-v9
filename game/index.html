@@ -166,8 +166,9 @@
   #hud .topbar { position: absolute; top: 10px; left: 12px; right: 12px; display: flex;
     justify-content: space-between; align-items: flex-start; }
   #hud .col { display: flex; flex-direction: column; gap: 6px; }
-  #hud .hchip { background: rgba(20, 12, 20, 0.78); border: 1px solid rgba(255,190,110,0.45);
-    border-radius: 9px; padding: 6px 12px; font-size: 14px; font-weight: 800; letter-spacing: 1px; }
+  #hud .hchip { background: rgba(20, 12, 20, 0.87); border: 1px solid rgba(255,190,110,0.5);
+    border-radius: 9px; padding: 6px 12px; font-size: 14px; font-weight: 800; letter-spacing: 1px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.65); }
   #hud .hchip b { color: #ffd98f; }
   #timer { font-size: 36px; font-weight: 800; color: #fff3da; background: rgba(20,12,20,0.78);
     border: 1px solid rgba(255,190,110,0.5); border-radius: 12px; padding: 4px 20px; letter-spacing: 2px;
@@ -175,8 +176,8 @@
   #pausebtn { pointer-events: auto; cursor: pointer; width: 52px; height: 52px; border-radius: 12px;
     border: 1px solid rgba(255,190,110,0.55); background: rgba(20,12,20,0.82); color: #ffd98f;
     font-size: 19px; font-weight: 900; }
-  #gauges { position: absolute; left: 12px; top: 118px; background: rgba(20,12,20,0.72);
-    border: 1px solid rgba(255,190,110,0.4); border-radius: 12px; }
+  #gauges { position: absolute; left: 12px; top: 118px; background: rgba(20,12,20,0.82);
+    border: 1px solid rgba(255,190,110,0.45); border-radius: 12px; }
   #ribbon { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); width: 46px; height: 230px;
     background: rgba(20,12,20,0.72); border: 1px solid rgba(255,190,110,0.4); border-radius: 9px; }
   #ribbon .track { position: absolute; left: 50%; top: 8px; bottom: 8px; width: 4px; margin-left: -2px;
@@ -187,7 +188,7 @@
     color: #f3d9b0; font-weight: 700; white-space: nowrap; }
   #radar { position: absolute; left: 12px; top: 282px; border-radius: 50%;
     box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
-  #minimap { position: absolute; left: 12px; top: 406px; background: rgba(20,12,20,0.72);
+  #minimap { position: absolute; left: 12px; top: 406px; background: rgba(20,12,20,0.82);
     border: 1px solid rgba(255,190,110,0.4); border-radius: 12px; }
   #cambtn { pointer-events: auto; cursor: pointer; border: 1px solid rgba(255,190,110,0.55);
     background: rgba(20,12,20,0.82); color: #ffd98f; border-radius: 9px; padding: 7px 10px;
@@ -257,9 +258,14 @@
     text-align: center; padding: 30px; font-size: 17px; background: #2a1626; z-index: 20; }
   /* ---------- v13: icons, chart, radio ---------- */
   .planeicon { width: 100%; max-width: 330px; display: block; margin: 2px auto 8px;
-    border-radius: 10px; border: 1px solid rgba(255, 190, 110, 0.35); }
+    border-radius: 10px; border: 1px solid rgba(255, 190, 110, 0.35);
+    /* The portrait's own ground (v16): the offscreen render clears to
+       this same dark plum, so the frame never flashes a light strip
+       while the PNG is still decoding — the white bar a gate once
+       caught above the first hangar card. */
+    background: #171019; aspect-ratio: 2 / 1; }
   .ticketicon { width: 92px; float: right; margin: 0 0 6px 10px; border-radius: 8px;
-    border: 1px solid rgba(255, 190, 110, 0.30); }
+    border: 1px solid rgba(255, 190, 110, 0.30); background: #171019; aspect-ratio: 2 / 1; }
   .typeicon { display: inline-flex; width: 21px; height: 21px; color: #ffd98f; vertical-align: -5px; }
   .typeicon svg { width: 100%; height: 100%; }
   #radio { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);

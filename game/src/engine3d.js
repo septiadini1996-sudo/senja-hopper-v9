@@ -188,6 +188,12 @@ void main(){
   vec2 cell = floor(vWorld.xz * 0.9);
   float tw = hash(cell + floor(uTime * 2.7));
   float sparkle = step(0.965, tw) * exp(-dist / 620.0);
+  // A second, finer glitter grain (v16): smaller cells, a faster
+  // shimmer, gathered tighter into the sun streak — the near water
+  // sparkles at two scales now, like real chop under a low sun.
+  vec2 cellF = floor(vWorld.xz * 2.6);
+  float twF = hash(cellF + floor(uTime * 3.9) * 1.7);
+  sparkle += step(0.978, twF) * exp(-dist / 340.0) * 0.8;
   vec3 toP = normalize(vWorld - uCam);
   // Powers by multiplication: pow() is the sea's most expensive habit
   // and this surface covers half the frame.
@@ -206,6 +212,13 @@ void main(){
     float cap = step(1.0 - 0.16 * uCaps, hash(capCell)) * smoothstep(0.45, 0.92, vWave);
     c += vec3(0.85, 0.90, 0.92) * cap * 0.5 * uCaps;
   }
+  // Shore foam lace (v16): where the shallows rise to meet a beach
+  // (vShore climbing), a breathing band of foam brightens and fades
+  // with a slow wash cycle — the waterline moves even when the mesh
+  // beneath it is pinned still by the land mask.
+  float foamBand = smoothstep(0.62, 0.97, vShore)
+    * (0.55 + 0.45 * sin(uTime * 1.15 + vWorld.x * 0.55 + vWorld.z * 0.48));
+  c += vec3(0.92, 0.95, 0.94) * foamBand * 0.30;
   float fr = 1.0 - max(V.y, 0.0);
   c += uSheen * (fr * fr) * uSheenI; // light sheen at grazing angles
   // The grade (v13), shared with the lit world: deeper, separated water.
@@ -241,9 +254,14 @@ void main(){ vec3 d = normalize(vDir);
   c += uHaloCol * pow(sd, 3.0) * 0.10 * uDiscI; // the far halo: half the sky leans toward the light
   // Cirrus (v13): two faint high bands streaked across the upper sky,
   // catching the sun's colour — the dome stops reading as bare gradient.
-  float cir = sin(d.y * 95.0 + sin(atan(d.z, d.x) * 2.0 + d.y * 6.0) * 1.6);
+  // The bands drift with the hour now (v16) and a second, broader and
+  // fainter layer rides lower: the high sky has weather in it, moving.
+  float cir = sin(d.y * 95.0 + sin(atan(d.z, d.x) * 2.0 + d.y * 6.0) * 1.6 + uTime * 0.006);
   float cirrus = smoothstep(0.86, 0.995, cir) * smoothstep(0.10, 0.34, d.y) * (1.0 - smoothstep(0.55, 0.85, d.y));
   c += (uHaloCol * 0.7 + vec3(0.30)) * cirrus * 0.055 * (0.35 + uDiscI * 0.65);
+  float cir2 = sin(d.y * 41.0 + sin(atan(d.z, d.x) * 3.0 - d.y * 4.0) * 2.2 - uTime * 0.004);
+  float cirrus2 = smoothstep(0.90, 0.998, cir2) * smoothstep(0.05, 0.22, d.y) * (1.0 - smoothstep(0.38, 0.62, d.y));
+  c += (uHaloCol * 0.6 + vec3(0.26)) * cirrus2 * 0.040 * (0.35 + uDiscI * 0.65);
   // Stars: a hashed cell field, only above the horizon, only at night.
   if (uStars > 0.01) {
     vec3 cell = floor(d * 130.0);
@@ -327,7 +345,7 @@ function buildRenderer(canvas, gl) {
   }
   let view = M4.ident(), proj = M4.ident(), camPos = [0, 10, 30];
   function setCamera(v, p, pos) { view = v; proj = p; camPos = pos; }
-  function draw(mesh, model, alpha = 1) {
+  function draw(mesh, model, alpha = 1, additive = false) {
     gl.useProgram(lit);
     gl.uniformMatrix4fv(gl.getUniformLocation(lit, 'uMVP'), false, M4.mul(proj, M4.mul(view, model)));
     gl.uniformMatrix4fv(gl.getUniformLocation(lit, 'uModel'), false, model);
@@ -341,10 +359,15 @@ function buildRenderer(canvas, gl) {
     gl.uniform3fv(gl.getUniformLocation(lit, 'uFog'), env.fog);
     gl.uniform1f(gl.getUniformLocation(lit, 'uFogD'), env.fogD);
     gl.uniform1f(gl.getUniformLocation(lit, 'uAlpha'), alpha);
-    if (alpha < 1) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
+    // Additive draws (v16) are the gunfire light's glow passes: colour
+    // ADDS to the frame instead of covering it, so a hot beam over a
+    // bright sky still burns instead of washing grey — the tracer's
+    // halo and core, the muzzle flash and the hit sparks ride this.
+    const blended = alpha < 1 || additive;
+    if (blended) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
     gl.bindVertexArray(mesh.vao);
     gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
-    if (alpha < 1) { gl.disable(gl.BLEND); gl.depthMask(true); }
+    if (blended) { gl.disable(gl.BLEND); gl.depthMask(true); }
   }
   function drawSea(mesh, origin, time, opts = {}) {
     gl.useProgram(sea);
