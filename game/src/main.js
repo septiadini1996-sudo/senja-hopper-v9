@@ -2658,24 +2658,40 @@ if (shot === 'flight' || shot === 'receipt') {
   const bs = $('#scr-board'), pl = bs.querySelector('.progressline');
   if (pl) bs.scrollTop = Math.max(0, pl.offsetTop - 12);
 } else if (shot === 'hangar') {
-  // The fleet frame (v16.1): the endgame hangar — the campaign
-  // complete, every airframe hers, the flagship selected so her
-  // jet fills the living preview while the starter heads the fleet
-  // list below. The scroll is pinned by measurement off the
-  // preview panel itself, so at dossier height the frame holds
-  // the whole preview and the first cards whole — the same state
-  // every capture, byte for byte.
+  // The fleet frame (v16.1, recomposed v18.2 on the owner's order
+  // that the screenshots display the planes AND the objectives):
+  // the endgame hangar — the campaign complete, every airframe
+  // hers, the flagship selected so her jet fills the living
+  // preview while the starter heads the fleet list below. The
+  // upgrade lines are staged mid-refit (pips at mixed levels,
+  // live next-level prices) so the state the frame implies is
+  // the state the save holds. The scroll is pinned by
+  // measurement off the preview panel itself, so at dossier
+  // height the frame holds the whole preview and the first
+  // cards whole — the same state every capture, byte for byte.
+  // v18.2: the preview canvas is stood smaller on its panel
+  // (staging-only display size; the drawing buffer, the pinned
+  // pose and the turntable are untouched) so the window also
+  // carries the second airframe's portrait and name — the fleet
+  // ladder reads as a ladder, not a single card. The upgrade
+  // cards stand below all six fleet cards in the real layout
+  // (~2,200 px of fleet between the first card and them), so no
+  // honest 720p scroll window holds preview + card + upgrades
+  // at legible scale; they are proven separately in evidence.
   save.settings.lang = 'en'; t = makeT('en'); save.started = true;
   save.saldo = 900000;
   save.stamps = ['penida', 'lombok', 'sumbawa', 'flores', 'sulawesi', 'maluku', 'papua'];
   save.islandIdx = 7;
-  save.planes.owned = ['kutilang', 'pipit', 'alap', 'bangau', 'raksasa'];
+  save.planes.owned = ['kutilang', 'pipit', 'alap', 'rajawali', 'bangau', 'raksasa'];
   save.planes.active = 'kutilang';
+  save.upgrades = { engine: 2, fuel: 1, hull: 2, handling: 1 };
   setActivePlaneMesh();
   pvState = createPreviewState('raksasa');
   renderHangar(); show('hangar');
   const hs = $('#scr-hangar'), pv = hs.querySelector('.pvcard');
-  if (pv) hs.scrollTop = Math.max(0, pv.offsetTop - 14);
+  const pvc = hs.querySelector('#pvcanvas');
+  if (pvc) { pvc.style.width = '36%'; pvc.style.margin = '0 auto'; }
+  if (pv) hs.scrollTop = Math.max(0, pv.offsetTop - 12);
 } else if (shot === 'title') {
   // The cover backdrop: the title screen flown over the home island —
   // senja light, the land airfield and its mountains behind the logo.
