@@ -401,7 +401,12 @@ function renderHangar() {
   s.append(hangarPreviewPanel());
   // The fleet (v12): every airframe, owned or for sale. Switching is
   // free; buying is forever; the board's heavy work is why they exist.
-  s.append(el('h3', 'ptitle', t('fleet_title')));
+  // The heading and the cards share one backed panel (v16.1): the
+  // strip between the heading and the first card used to be raw
+  // stage showing through the screen's transparent band — the band
+  // a gate kept reading as a white bar above the first card.
+  const wrap = el('div', 'panel fleetwrap');
+  wrap.append(el('h3', 'ptitle', t('fleet_title')));
   for (const p of PLANES) {
     const owned = save.planes.owned.includes(p.id);
     const active = save.planes.active === p.id;
@@ -440,8 +445,9 @@ function renderHangar() {
       if (save.saldo < p.price) b.disabled = true;
       card.append(b);
     }
-    s.append(card);
+    wrap.append(card);
   }
+  s.append(wrap);
   const rows = [
     ['engine', t('engine'), t('engine_desc')], ['fuel', t('fuel_tank'), t('fuel_desc')], ['hull', t('hull'), t('hull_desc')],
     ['handling', t('up_handling'), t('up_handling_desc')],
@@ -510,7 +516,7 @@ function planeIcons() {
 // meshes cached per airframe, and a rAF loop that lives only while
 // the hangar is on screen. At dossier capture the pose is pinned
 // (previewPose under IS_SHOT), so the hangar frame stays byte-stable.
-let pvState = null, pvR = null, pvMeshes = {}, pvRaf = 0;
+let pvState = null, pvR = null, pvCanvas = null, pvMeshes = {}, pvRaf = 0;
 function hangarPreviewPanel() {
   const card = el('div', 'panel card pvcard');
   const cv = document.createElement('canvas'); cv.id = 'pvcanvas';
@@ -525,7 +531,14 @@ function pvTick() {
   if (screen !== 'hangar') return;
   const cv = $('#pvcanvas'); if (!cv) return;
   try {
-    if (!pvR) { pvR = createRenderer(cv); if (pvR) pvR.setEnv({ ...skyAt(1, 18.25), fog: [0.10, 0.06, 0.09], fogD: 0.0001 }); }
+    // renderHangar rebuilds the screen's DOM, so every visit after
+    // the first hands us a NEW canvas while the renderer still points
+    // at the detached original — the visible stand then never paints
+    // (v16.1: an unpainted canvas is the one surface a capture
+    // pipeline can read as a white slab). Rebind on canvas change:
+    // drop the renderer and its per-context meshes, rebuild here.
+    if (pvR && pvCanvas !== cv) { pvR = null; pvMeshes = {}; }
+    if (!pvR) { pvR = createRenderer(cv); pvCanvas = cv; if (pvR) pvR.setEnv({ ...skyAt(1, 18.25), fog: [0.10, 0.06, 0.09], fogD: 0.0001 }); }
     if (pvR && pvState) {
       const pose = previewPose(pvState, ambient, IS_SHOT);
       const spec = planeById(pose.planeId);
