@@ -15,6 +15,40 @@
   .screen.on { display: flex; }
   .panel { background: linear-gradient(180deg, rgba(38, 22, 30, 0.88), rgba(24, 14, 22, 0.86)); border: 1px solid rgba(255, 190, 110, 0.35);
     border-radius: 14px; padding: 14px 16px; box-shadow: 0 10px 34px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255, 210, 140, 0.14); }
+  /* Board tickets sit over the live 3D stage (v15 gate fix): at the
+     menu panels' translucency the scene bled through and the ticket
+     text lost its contrast, worst on the first card. Ticket panels go
+     near-solid — the same gradient and depth, a denser body. */
+  #scr-board .panel { background: linear-gradient(180deg, rgba(38, 22, 30, 0.97), rgba(24, 14, 22, 0.96)); }
+  /* The mode select (v15): five cards in the menu's own language. */
+  .modepanel { margin-top: 16px; width: min(600px, 94vw); box-sizing: border-box; }
+  .modegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 9px; margin-top: 6px; }
+  .modecard { background: linear-gradient(160deg, rgba(52, 36, 22, 0.55), rgba(10, 14, 18, 0.45));
+    border: 1px solid rgba(242, 165, 65, 0.45); border-radius: 12px; padding: 10px;
+    display: flex; flex-direction: column; gap: 6px; box-shadow: inset 0 1px 0 rgba(255, 210, 140, 0.12); }
+  .modename { font-weight: 800; letter-spacing: 1.5px; color: #ffe9c4; font-size: 14px; }
+  .modedesc { margin: 0; flex: 1; }
+  .modebest { color: #ffc21f; font-weight: 700; font-size: 12px; letter-spacing: 0.5px; }
+  .modecard .btn { margin: 2px 0 0; }
+  /* The patrol's gunsight (v15): a reticle pinned to the chase view. */
+  #sight { position: fixed; left: 50%; top: 46%; width: 92px; height: 92px; transform: translate(-50%, -50%);
+    z-index: 6; pointer-events: none; }
+  #sight .sc-ring { position: absolute; inset: 15px; border: 2px solid rgba(255, 110, 80, 0.85); border-radius: 50%;
+    box-shadow: inset 0 0 12px rgba(255, 90, 60, 0.30), 0 0 8px rgba(0,0,0,0.35); }
+  #sight .sc-dot { position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px;
+    background: #ff5a3c; border-radius: 50%; }
+  #sight .sc-t { position: absolute; background: rgba(255, 110, 80, 0.9); }
+  #sight .sc-t.t { left: 50%; top: 0; width: 2px; height: 17px; margin-left: -1px; }
+  #sight .sc-t.b { left: 50%; bottom: 0; width: 2px; height: 17px; margin-left: -1px; }
+  #sight .sc-t.l { left: 0; top: 50%; width: 17px; height: 2px; margin-top: -1px; }
+  #sight .sc-t.r { right: 0; top: 50%; width: 17px; height: 2px; margin-top: -1px; }
+  /* The patrol's trigger (v15): a big hold-to-fire disc, low right. */
+  #firebtn { position: fixed; right: 18px; bottom: 168px; z-index: 7; width: 84px; height: 84px; border-radius: 50%;
+    border: 2px solid rgba(255, 160, 120, 0.85); cursor: pointer; touch-action: none; pointer-events: auto;
+    background: radial-gradient(circle at 35% 30%, rgba(255, 122, 82, 0.92), rgba(158, 42, 20, 0.94));
+    color: #fff6e6; font: 800 15px/1 inherit; letter-spacing: 1.5px; align-items: center; justify-content: center;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45), inset 0 2px 6px rgba(255, 220, 190, 0.35); }
+  #firebtn.held { filter: brightness(1.4); }
   h1.logo { font-size: 52px; letter-spacing: 3px; margin: 26px 0 2px; color: #ffd98f;
     text-shadow: 0 3px 0 #a33d1c, 0 6px 22px rgba(0,0,0,0.6); font-weight: 800; text-align: center; }
   .sub { font-size: 16px; letter-spacing: 4px; color: #ffcf9e; margin: 0 0 14px; text-transform: uppercase;

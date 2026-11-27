@@ -456,6 +456,34 @@ export function buildIsland(R, isl, scale = 1) {
   b.box(ex, 0.16, ez, 2.8 * scale, 0.5 * scale, 1.05 * scale, [0.72, 0.30, 0.20]); // the tied-up boat's hull
   b.box(ex, 0.48, ez, 1.1 * scale, 0.35 * scale, 0.8 * scale, [0.92, 0.90, 0.86]); // its cabin
   b.box(ex, 0.95, ez, 0.07 * scale, 1.1 * scale, 0.07 * scale, [0.45, 0.38, 0.32]); // its mast
+  // The approach shore (v15 gate fix): the lane meets every island on
+  // its south coast (local −y — the chart's north lies at −Z), but the
+  // seeded town, and with it the jetty above, can sit on any arc of
+  // the coast, often the far side from an arriving pilot, who then
+  // never sees either. A second, smaller jetty with a teal-hulled
+  // boat and two more umbrellas dress the southernmost shore itself,
+  // so the settlement's working edge reads on a normal approach. All
+  // of it is laid from the shape alone, after every seeded item, so
+  // no house, palm or rock moves.
+  let si = 0;
+  for (let i = 1; i < isl.shape.length; i++) if (isl.shape[i][1] < isl.shape[si][1]) si = i;
+  const sp = isl.shape[si];
+  for (const [jk, jy] of [[1.0, 0.30], [1.08, 0.23], [1.16, 0.17]]) {
+    const [jx, jz] = W([ax + (sp[0] - ax) * jk, ay + (sp[1] - ay) * jk]);
+    b.box(jx, jy, jz, 1.4 * scale, 0.14, 1.4 * scale, [0.58, 0.47, 0.35]); // south jetty platform
+  }
+  const [qx, qz] = W([ax + (sp[0] - ax) * 1.16, ay + (sp[1] - ay) * 1.16]);
+  b.box(qx - 0.5 * scale, -0.10, qz, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]);
+  b.box(qx + 0.5 * scale, -0.10, qz, 0.15 * scale, 0.5, 0.15 * scale, [0.45, 0.37, 0.29]); // its posts
+  const [tx, tz] = W([ax + (sp[0] - ax) * 1.27, ay + (sp[1] - ay) * 1.27]);
+  b.box(tx, 0.16, tz, 2.6 * scale, 0.5 * scale, 1.0 * scale, [0.16, 0.44, 0.52]); // the south boat, teal-hulled
+  b.box(tx, 0.46, tz, 1.0 * scale, 0.32 * scale, 0.75 * scale, [0.92, 0.90, 0.86]); // its cabin
+  b.box(tx, 0.88, tz, 0.07 * scale, 1.0 * scale, 0.07 * scale, [0.45, 0.38, 0.32]); // its mast
+  for (const off of [-1, 1]) {
+    const [ux, uz] = W(sandPts[(si + off + sandPts.length) % sandPts.length]);
+    b.box(ux, 0.25 + 0.55 * scale, uz, 0.09 * scale, 1.1 * scale, 0.09 * scale, [0.45, 0.38, 0.32]); // umbrella pole
+    b.cone(ux, 0.25 + 1.05 * scale, uz, 1.25 * scale, 0.5 * scale, 7, off < 0 ? [0.90, 0.62, 0.16] : [0.85, 0.40, 0.55]); // its canopy
+  }
   return R.makeMesh(b);
 }
 
@@ -780,6 +808,40 @@ export function buildHomeTerrain(R) {
   b.cone(170, 0.02, -50, 9, 2.6, 6, ROCK);
   b.cone(-178, 0.02, -160, 11, 3.4, 6, ROCK);
   b.cone(-60, 0.02, -415, 10, 3.0, 6, ROCK);
+  // The field's own harbour (v15 gate fix): the home shore east of the
+  // strip had no working edge at all — no jetty, no boat, no shade —
+  // so the settlement dressing the islands wear was nowhere to be seen
+  // from the runway or the climb-out. A plank jetty reaches east from
+  // the sand beside the airport with a fishing boat tied at its end,
+  // and umbrellas dress both shores at the field's latitude. Mesh
+  // only: the height table the flight model reads is untouched.
+  for (const [jx, jy] of [[163, 0.30], [174, 0.24], [185, 0.18], [196, 0.13]]) {
+    b.box(jx, jy, -30, 11, 0.16, 3.2, [0.58, 0.47, 0.35]); // jetty deck sections
+  }
+  b.box(196, -0.10, -31.8, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]);
+  b.box(196, -0.10, -28.2, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]); // jetty posts
+  b.box(206, 0.17, -30, 3.4, 0.55, 1.25, [0.16, 0.44, 0.52]); // the tied-up boat, teal hull
+  b.box(206, 0.52, -30, 1.25, 0.36, 0.9, [0.92, 0.90, 0.86]); // its cabin
+  b.box(206, 0.98, -30, 0.08, 1.15, 0.08, [0.45, 0.38, 0.32]); // its mast
+  for (const [ux, uz, col] of [[150, 18, [0.82, 0.30, 0.22]], [154, -88, [0.20, 0.55, 0.55]], [-152, -40, [0.90, 0.62, 0.16]]]) {
+    b.box(ux, 0.62, uz, 0.10, 1.15, 0.10, [0.45, 0.38, 0.32]); // umbrella pole
+    b.cone(ux, 1.32, uz, 1.35, 0.55, 7, col); // its canopy
+  }
+  // A second, smaller jetty on the north shore, dead ahead of every
+  // climb-out: the far sand ends at z ≈ −375, and she overflies this
+  // harbour on each departure, so the field's working edge is in the
+  // frame even for a pilot who never looks sideways.
+  for (const [jz, jy] of [[-380, 0.28], [-389, 0.22], [-398, 0.16]]) {
+    b.box(40, jy, jz, 3.0, 0.15, 9, [0.58, 0.47, 0.35]); // north jetty deck
+  }
+  b.box(38.2, -0.10, -398, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]);
+  b.box(41.8, -0.10, -398, 0.35, 0.55, 0.35, [0.45, 0.37, 0.29]); // its posts
+  b.box(40, 0.17, -407, 1.15, 0.52, 3.1, [0.72, 0.30, 0.20]); // the north boat, red hull
+  b.box(40, 0.50, -407, 0.85, 0.34, 1.15, [0.92, 0.90, 0.86]); // its cabin
+  for (const [ux, uz, col] of [[18, -366, [0.85, 0.40, 0.55]], [66, -370, [0.90, 0.62, 0.16]]]) {
+    b.box(ux, 0.62, uz, 0.10, 1.15, 0.10, [0.45, 0.38, 0.32]);
+    b.cone(ux, 1.32, uz, 1.35, 0.55, 7, col);
+  }
   return R.makeMesh(b);
 }
 
@@ -978,6 +1040,43 @@ export function buildBeacon(R) {
   const b = new Builder();
   b.box(0, 0, 0, 0.62, 0.62, 0.62, [2.6, 0.40, 0.32]);
   return R.makeMesh(b);
+}
+// The smuggler drone (v15, SKY PATROL): a dark quadcopter built to read
+// as a machine, not a blob — a faceted carbon pod with hazard chevrons,
+// four arms with motor bells and spinning rotor discs, a gimbal camera
+// eye slung under the nose, and a red beacon bar that blinks it alive.
+// The rotors are their own mesh so the scene can spin them at speed.
+// Colours stay near-black with orange hazard trim: it should look like
+// something that does not want to be seen, flown by someone in a hurry.
+export function buildDrone(R) {
+  const body = new Builder();
+  const CARBON = [0.10, 0.11, 0.13], CARBON2 = [0.16, 0.17, 0.20];
+  const HAZARD = [0.95, 0.45, 0.08], EYE = [0.25, 0.75, 0.95];
+  // The pod: a tapered hull, a domed top shell, and a darker belly pan.
+  body.box(0, 0, 0, 0.95, 0.42, 1.7, CARBON);
+  body.box(0, 0.30, -0.1, 0.7, 0.22, 1.1, CARBON2);
+  body.box(0, -0.28, 0.1, 0.8, 0.14, 1.3, [0.06, 0.07, 0.08]);
+  // Hazard chevrons across the top shell — the one loud thing on it.
+  body.box(-0.18, 0.43, -0.35, 0.20, 0.03, 0.30, HAZARD);
+  body.box(0.18, 0.43, -0.35, 0.20, 0.03, 0.30, HAZARD);
+  body.box(-0.18, 0.43, 0.25, 0.20, 0.03, 0.30, HAZARD);
+  body.box(0.18, 0.43, 0.25, 0.20, 0.03, 0.30, HAZARD);
+  // The gimbal eye under the nose, and the beacon bar across the tail.
+  body.box(0, -0.42, -0.62, 0.30, 0.26, 0.30, CARBON2);
+  body.box(0, -0.44, -0.80, 0.16, 0.14, 0.06, EYE);
+  body.box(0, 0.12, 0.92, 0.62, 0.12, 0.10, [2.4, 0.35, 0.30]);
+  // Four arms on the diagonal, motor bells at their tips, skids below.
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    body.box(sx * 0.72, 0.10, sz * 0.72, 0.95, 0.12, 0.20, CARBON);
+    body.box(sx * 1.12, 0.20, sz * 1.12, 0.30, 0.24, 0.30, CARBON2);
+    body.box(sx * 0.55, -0.52, sz * 0.30, 0.08, 0.55, 0.08, CARBON2);
+  }
+  body.box(0, -0.80, 0, 1.45, 0.07, 0.16, CARBON2);
+  const rotors = new Builder();
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    rotors.disc(sx * 1.12, 0.36, sz * 1.12, 0.62, 10, [0.55, 0.58, 0.62]);
+  }
+  return { body: R.makeMesh(body), rotors: R.makeMesh(rotors) };
 }
 // The terminal flag: an Indonesian red-over-white on its pole, waved by
 // the scene rocking it on its hoist.
@@ -1605,6 +1704,22 @@ export function createScene(R, assets) {
         R.draw(assets.boom.smoke, M4.compose(bx, Math.min((age - 0.2) * 1.7, 4.5), bz, 0, 0, 0, 0.8 + age * 0.5), sa);
       }
     }
+    // Mode explosions (v15): a downed drone burns where it fell — the
+    // same fireball-and-smoke presentation as the crash, smaller, and
+    // several can be on the water at once, so the stage carries a list.
+    if (st.booms && assets.boom) {
+      for (const bm of st.booms) {
+        const age = bm.age, bx = bm.x, bz = -bm.dist, by = bm.altM || 0;
+        if (age < 0.9) {
+          R.draw(assets.boom.core, M4.compose(bx, by + 0.3, bz, 0, st.time * 0.9, 0, (0.7 + age * 3.4) * 0.55), 0.95 * (1 - age / 0.9));
+          R.draw(assets.boom.debris, M4.compose(bx, by + Math.max(0, Math.sin(Math.min(age, 1.4) / 1.4 * Math.PI) * 1.6), bz, 0, 0, 0, (1 + age * 0.9) * 0.6), clamp(1 - age / 1.2, 0, 1));
+        }
+        if (age > 0.2 && age < 5) {
+          const sa = clamp(0.6 - (age - 0.2) * 0.1, 0.12, 0.6);
+          R.draw(assets.boom.smoke, M4.compose(bx, by + Math.min((age - 0.2) * 1.4, 3.2), bz, 0, 0, 0, (0.8 + age * 0.5) * 0.6), sa);
+        }
+      }
+    }
     if (st.gate && assets.gate && !st.gate.passed) {
       R.draw(assets.gate, M4.compose(st.gate.x, st.gate.altM, -st.gate.dist, Math.PI / 2, 0, 0));
     }
@@ -1664,7 +1779,7 @@ export function createScene(R, assets) {
     // fill the forward view with dark geometry (the first cockpit framing
     // stared into the wing strut). The horizon, the rings and the strip are
     // the cockpit's instruments.
-    if (st.camMode !== 'cockpit') {
+    if (st.camMode !== 'cockpit' && !st.noPlane) {
       const planeM = M4.compose(st.x, st.alt + 0.62, pz, st.pitchVis * 0.38, -st.bank * 0.22, -st.bank * 0.55, st.planeScale || 1);
       R.draw(assets.plane.plane, planeM);
       const propM = M4.mul(planeM, M4.compose(0, 1.00, -3.42, 0, 0, st.propSpin));
@@ -1679,6 +1794,34 @@ export function createScene(R, assets) {
     if (assets.cone && emis > 0.9) {
       const coneM = M4.compose(st.x, st.alt + 1.1, pz - 2.4, 0, 0, -st.bank * 0.3);
       R.draw(assets.cone, coneM, clamp((emis - 0.9) / 1.3, 0, 1) * 0.13);
+    }
+    // The race rivals (v15, AIR RACE): two more airframes in the world,
+    // flown by the demo pilot — drawn exactly as the player's own plane
+    // is, prop spinning with their throttle, in liveries she never wears.
+    if (st.rivals && assets.plane) {
+      for (const rv of st.rivals) {
+        if (!rv.mesh) continue;
+        const m = M4.compose(rv.x, rv.alt + 0.62, -rv.dist, rv.pitchVis * 0.38, -rv.bank * 0.22, -rv.bank * 0.55, rv.mesh.scale);
+        R.draw(rv.mesh.set.plane, m);
+        const pm = M4.mul(m, M4.compose(0, 1.00, -3.42, 0, 0, rv.propSpin || 0));
+        R.draw(rv.mesh.set.prop, pm);
+        R.draw(rv.mesh.set.disc, pm, 0.10 + 0.20 * (rv.throttle || 0));
+        R.draw(assets.shadow, M4.compose(rv.x, 0.15, -rv.dist, 0, 0, 0, 1 + rv.alt * 0.02), clamp(0.40 - rv.alt * 0.0018, 0.26, 0.40));
+      }
+    }
+    // The patrol's quarry (v15, SKY PATROL): smuggler drones weaving and
+    // running ahead of the nose. The body banks with its weave; the
+    // rotor discs spin at a blur and catch what light there is, so a
+    // drone reads as a machine at range, not a speck.
+    if (st.drones && assets.drone) {
+      for (const d of st.drones) {
+        if (!d.alive || d.escaped) continue;
+        const bank = Math.sin(st.time * 3.4 + d.phase) * 0.35;
+        const yaw = Math.sin(st.time * 1.3 + d.phase) * 0.22;
+        const m = M4.compose(d.x, d.altM, -d.dist, 0.06, yaw, bank, 1);
+        R.draw(assets.drone.body, m);
+        R.draw(assets.drone.rotors, M4.mul(m, M4.compose(0, 0, 0, 0, st.time * 26 + d.phase, 0)), 0.5);
+      }
     }
     // The cockpit interior (v11): in cockpit mode, during a flight (the
     // staged title state carries no surface), the pilot's own cockpit —

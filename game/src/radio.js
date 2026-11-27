@@ -35,6 +35,16 @@ export function radioPoll(r, f, ctx) {
   if (f.airborne && remain < 700 && remain > 40) say('landing', 'tower');
   if (f.done && f.outcome === 'landed') say('welcome', 'tower');
   if (f.done && f.outcome === 'splash') say('crashcall', 'tower');
+  // Sky Patrol traffic (v15): the tower works the hunt on the same
+  // channel — the contact call once she is up, praise on the first
+  // drone down, and a warning as each new wave is reported in. The
+  // mode's ledger rides in ctx (downed, wave) so this stays pure.
+  if (ctx.mode === 'patrol') {
+    if (f.airborne && f.alt > 14) say('patrol_start', 'tower');
+    if ((ctx.downed || 0) >= 1) say('patrol_hit', 'tower');
+    if ((ctx.wave || 0) >= 2) say('patrol_wave', 'tower');
+    if ((ctx.wave || 0) >= 4) say('patrol_wave2', 'tower');
+  }
   return out;
 }
 

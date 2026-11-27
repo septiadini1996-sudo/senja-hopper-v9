@@ -1,1 +1,1 @@
-[{"name":"1-cover.jpg","query":"?shot=title&seed=1"},{"name":"2-map.jpg","query":"?shot=map&seed=1"},{"name":"3-hangar.jpg","query":"?shot=hangar&seed=1"},{"name":"4-jet.jpg","query":"?shot=flight&seed=1&hour=10.5&wx=clear&type=cargo&plane=raksasa"}]
+[{"name":"1-flight.jpg","query":"?shot=flight&seed=1&hour=10.5&wx=clear&type=cargo&at=ring"},{"name":"2-patrol.jpg","query":"?shot=patrol&seed=1"},{"name":"3-board.jpg","query":"?shot=board&seed=1"},{"name":"4-map.jpg","query":"?shot=map&seed=1"}]

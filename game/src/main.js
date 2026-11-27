@@ -5,7 +5,7 @@
 // schemes mid-flight changes only who is holding the controls — never
 // the flight itself.
 import { createRenderer, M4 } from './engine3d.js';
-import { buildPlane, buildJet, buildJetFanBlur, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, cloudField, createScene } from './scene3d.js';
+import { buildPlane, buildJet, buildJetFanBlur, buildIsland, buildRingMeshes, buildSeaMesh, buildSkyMesh, buildBuoys, buildBlob, buildStrip, buildStripGlow, buildDepartureRunway, buildDepartureGlow, buildHomeTerrain, buildShallows, buildDestShallows, buildExplosion, buildBird, buildBeacon, buildFlag, buildVan, buildSock, buildStreaks, buildAirport, buildCloud, buildCloudB, buildCloudC, buildBoat, buildGateMesh, buildCockpit, buildLightCone, buildDrone, cloudField, createScene } from './scene3d.js';
 import { cockpitState } from './cockpit.js';
 import { createFlight, stepFlight, settleFlight, guidance, objectiveState, RUNWAY_M } from './flight.js';
 import { GAME_HOUR_SECONDS, skyAt, weatherAtBlock, blockOfHour, fmtGameHour, WEATHER_PARAMS } from './clock.js';
@@ -20,6 +20,7 @@ import { minimapRoute, minimapPlane } from './minimap.js';
 import { createPreviewState, previewSelect, previewPose } from './preview.js';
 import { makeFrame, keyboardFrame, stickFrame, sliderValue, touchFrame, gyroFrame, gyroButtons, conditionFrame } from './input-core.js';
 import { pilotFrame } from './demo-pilot.js';
+import { patrolWaveSpec, spawnPatrolWave, stepDrones, patrolShot, patrolAccuracy, createPatrol, createRush, rushRing, rushRingPassed, rushRingMissed, freeLeg, RACE_FROM, RACE_TO, RIVALS, racePosition, raceBand, raceFinishTime, recordPatrol, recordRush, recordRace, recordFreeVisit } from './modes.js';
 import { clamp, fmtKnots, fmtFeet, fmtRp, fmtClock, FT } from './util.js';
 
 const $ = s => document.querySelector(s);
@@ -60,6 +61,8 @@ let camMode = save.camMode || 'near';
 const keys = new Set();
 const held = { up: false, down: false, left: false, right: false, thrUp: false, thrDn: false };
 const stickVec = { dx: 0, dy: 0 };
+let fireHeld = false; // the patrol's trigger, held on the FIRE button (v15)
+let freeAt = -1; // free flight's standing island; -1 = wherever the campaign stands
 const gyro = { status: 'idle', enabled: false, neutral: { beta: 0, gamma: 0 }, sens: 'std', have: false };
 const tilt = { beta: 0, gamma: 0 };
 
@@ -81,7 +84,10 @@ function radioText(m) {
 }
 function pollRadio() {
   if (!flightCtx || !radio) return;
-  const msgs = radioPoll(radio, flightCtx.flight, { type: flightCtx.ticket.type || 'cargo', weather: envNow.state });
+  const msgs = radioPoll(radio, flightCtx.flight, { type: flightCtx.ticket.type || 'cargo', weather: envNow.state,
+    mode: flightCtx.mode ? flightCtx.mode.kind : null,
+    downed: flightCtx.mode && flightCtx.mode.patrol ? flightCtx.mode.patrol.downed : 0,
+    wave: flightCtx.mode && flightCtx.mode.patrol ? flightCtx.mode.patrol.wave : 0 });
   for (const m of msgs) {
     radioLog.push(m.key);
     if ((save.settings.radio ?? 4) > 0) radioQueue.push(m);
@@ -167,6 +173,42 @@ function renderTitle() {
   sc.addEventListener('click', () => { controlsReturn = 'title'; renderControls(); show('controls'); });
   const foot = el('div', 'topchips'); foot.append(sc);
   s.append(col, foot);
+  s.append(modeSection());
+}
+// The mode select (v15): the campaign and the four extra ways to fly,
+// one card each in the menu's own language — gradient panel, gold trim,
+// a line of what the mode IS, the best she has banked in it, and the
+// button that takes her up. Free flight also names its departure: any
+// island the campaign has unlocked can be stood on before takeoff.
+function modeSection() {
+  const wrap = el('div', 'panel modepanel');
+  wrap.append(el('h3', 'ptitle', t('modes_title')));
+  const grid = el('div', 'modegrid');
+  const at = freeAt >= 0 ? freeAt : save.islandIdx;
+  const cards = [
+    { kind: 'campaign', name: t('mode_campaign'), desc: t('mode_campaign_desc'), best: `✦ ${save.stamps.length}/${ISLANDS.length - 1}`, act: () => showBoard() },
+    { kind: 'patrol', name: t('mode_patrol'), desc: t('mode_patrol_desc'), best: save.modes.patrolBest ? t('best_score', { n: save.modes.patrolBest }) : '' },
+    { kind: 'rush', name: t('mode_rush'), desc: t('mode_rush_desc'), best: save.modes.rushBest ? t('best_score', { n: save.modes.rushBest }) : '' },
+    { kind: 'free', name: t('mode_free'), desc: t('mode_free_desc'), best: save.modes.freeVisits.length ? t('free_visited', { n: save.modes.freeVisits.length }) : '' },
+    { kind: 'race', name: t('mode_race'), desc: t('mode_race_desc'), best: save.modes.raceBest ? t('race_best_line', { n: t('race_pos_' + save.modes.raceBest) }) : t('race_none') },
+  ];
+  for (const c of cards) {
+    const card = el('div', 'modecard');
+    card.append(el('div', 'modename', c.name), el('p', 'meta modedesc', c.desc));
+    if (c.best) card.append(el('div', 'modebest', c.best));
+    if (c.kind === 'free' && save.islandIdx > 0) {
+      card.append(el('p', 'meta', t('mode_free_from')));
+      const chips = el('div', 'row'); chips.style.flexWrap = 'wrap';
+      for (let i = 0; i <= save.islandIdx; i++) {
+        chips.append(btn(ISLANDS[i].name, 'small' + (at === i ? ' primary' : ''), 'free-from-' + i, () => { freeAt = i; renderTitle(); }));
+      }
+      card.append(chips);
+    }
+    card.append(btn(t('mode_fly'), 'primary small', 'mode-' + c.kind, c.act || (() => startMode(c.kind))));
+    grid.append(card);
+  }
+  wrap.append(grid);
+  return wrap;
 }
 function showBoard() { renderBoard(); show('board'); }
 function board() {
@@ -310,6 +352,12 @@ function drawMapChart(cv) {
       g.strokeStyle = 'rgba(178, 32, 24, 0.85)'; g.lineWidth = 3; g.stroke();
       g.fillStyle = 'rgba(178, 32, 24, 0.9)'; g.font = '900 15px sans-serif';
       g.textAlign = 'center'; g.fillText('✓', cx, cy + 5);
+    }
+    // Free-flight visits (v15): a teal ring inside the postmark ring —
+    // islands she has simply been to, for the joy of the flying.
+    if ((save.modes.freeVisits || []).includes(isl.id)) {
+      g.beginPath(); g.arc(cx, cy, R * 0.34, 0, Math.PI * 2);
+      g.strokeStyle = 'rgba(13, 110, 110, 0.9)'; g.lineWidth = 2.5; g.stroke();
     }
     // The player's island, and the next stamp beyond it.
     if (i === save.islandIdx) {
@@ -657,6 +705,7 @@ function cycleCam() {
   save.camMode = camMode; storeSave(store, save);
   const b = $('#cambtn'); if (b) b.textContent = t('cam_' + camMode);
   audio.blip('click');
+  updateModeChrome();
 }
 function setHandling(mode) {
   save.handling = mode; storeSave(store, save);
@@ -753,6 +802,21 @@ function buildHud() {
   slider.innerHTML = '<div class="slabel">THR</div><div class="rail"></div><div class="fill"></div><div class="grip"></div>';
   ui.append(slider);
   bindSlider(slider);
+  // The patrol's gunsight and trigger (v15): a reticle pinned to the
+  // middle of the chase view, and a hold-to-fire button riding low on
+  // the right, clear of the throttle hand. Both live outside the HUD
+  // (which hides off-flight) and are shown by updateModeChrome only
+  // while a patrol sortie is on the flight screen.
+  const sight = el('div'); sight.id = 'sight'; sight.style.display = 'none';
+  sight.innerHTML = '<i class="sc-ring"></i><i class="sc-dot"></i><i class="sc-t t"></i><i class="sc-t b"></i><i class="sc-t l"></i><i class="sc-t r"></i>';
+  ui.append(sight);
+  const fire = el('button', 'firebtn'); fire.id = 'firebtn'; fire.style.display = 'none';
+  fire.addEventListener('pointerdown', e => { e.preventDefault(); fireHeld = true; fire.classList.add('held'); });
+  const fireOff = () => { fireHeld = false; fire.classList.remove('held'); };
+  fire.addEventListener('pointerup', fireOff);
+  fire.addEventListener('pointercancel', fireOff);
+  fire.addEventListener('lostpointercapture', fireOff);
+  ui.append(fire);
   // Pause overlay
   const pause = el('div'); pause.id = 'pause';
   const pcard = el('div', 'panel'); pcard.style.cssText = 'display:flex;flex-direction:column;align-items:center;';
@@ -828,6 +892,17 @@ function updateFlightControls() {
   showCtl('stick', inFlight && scheme === 'joystick');
   showCtl('slider', inFlight && scheme === 'joystick');
   if (inFlight && scheme === 'joystick') paintSlider($('#slider'));
+  updateModeChrome();
+}
+// The mode chrome (v15): the gunsight and the FIRE button exist only
+// for a patrol sortie, and the sight only where a sight makes sense —
+// the chase and far views, never the cockpit (her own panel is there).
+function updateModeChrome() {
+  const patrol = !!(flightCtx && flightCtx.mode && flightCtx.mode.kind === 'patrol' && screen === 'flight');
+  const fb = $('#firebtn');
+  if (fb) { fb.style.display = patrol ? 'flex' : 'none'; fb.textContent = t('fire'); }
+  const sg = $('#sight');
+  if (sg) sg.style.display = patrol && camMode !== 'cockpit' ? 'block' : 'none';
 }
 
 // ---------- flight lifecycle ----------
@@ -850,7 +925,12 @@ function startFlight(ticket) {
     assist: (save.handling || 'assisted') === 'assisted',
     pickup: ticket.pickup || null, gate: ticket.gate || null,
   });
-  flightCtx = { flight: f, ticket, weather: ticket.weather || 'clear', wxPin: ticket.wxPin || null, finished: false, frozen: false, settle: null, challenge: null, stampEarned: false, fx: [] };
+  // The forecast IS the weather flown (v15 gate fix): the ticket's
+  // weather word pins this leg's sky from departure to receipt, even
+  // when the 4-hour block rolls over mid-leg — the block still rolls
+  // for the NEXT ticket, and the light keeps following the clock. A
+  // staging wxPin on the ticket itself still outranks the forecast.
+  flightCtx = { flight: f, ticket, weather: ticket.weather || 'clear', wxPin: ticket.wxPin || ticket.weather || null, finished: false, frozen: false, settle: null, challenge: null, stampEarned: false, fx: [] };
   pilotMode = false; // every fresh flight starts in the player's hands (v13 fix: a demo pilot left engaged by staging used to override the next flight's controls — throttle and keys alike)
   envNow = skyAt(save.day, save.clockH, flightCtx.wxPin);
   flightCtx.weather = envNow.state;
@@ -985,6 +1065,237 @@ function renderReceipt() {
   s.append(row);
 }
 
+// ---------- the four extra ways to fly (v15) ----------
+// Each mode rides the campaign's own machinery: a synthetic ticket
+// through startFlight, the same world, weather clock, airframe and
+// flight model. What differs is the judgement — modes.js owns the
+// rules, this section owns the wiring: waves and timers stepped with
+// the flight, the race's rivals flown by the game's own demo pilot,
+// and receipts that write ONLY the save's mode ledger, never a rupiah
+// of campaign money.
+function modeTicket(kind) {
+  const wx = weatherAtBlock(save.day, blockOfHour(save.clockH));
+  const base = { main: false, pay: 0, weight: 1, customer: '—', cargo: '', cargoId: '', weather: wx };
+  if (kind === 'patrol') return { ...base, from: 0, to: 1, dist: 12000, rings: [], type: 'patrol' };
+  if (kind === 'rush') {
+    const rings = [];
+    let cursor = 0;
+    for (let i = 0; i < 8; i++) { const r = rushRing(991, i, cursor); rings.push(r); cursor = r.dist; }
+    return { ...base, from: 0, to: 1, dist: 30000, rings, type: 'rush' };
+  }
+  if (kind === 'race') return { ...base, from: RACE_FROM, to: RACE_TO, dist: HOP_M[RACE_FROM], rings: ringCourse(HOP_M[RACE_FROM], 6, 777), type: 'race' };
+  const at = freeAt >= 0 ? freeAt : save.islandIdx;
+  const leg = freeLeg(at, ISLANDS.length);
+  return { ...base, from: leg.from, to: leg.to, dist: HOP_M[Math.min(leg.from, leg.to)], rings: [], type: 'free' };
+}
+function startMode(kind) {
+  if (kind === 'campaign') { showBoard(); return; }
+  const ticket = modeTicket(kind);
+  const mode = { kind, endReason: null, newBest: false, cool: 0 };
+  if (kind === 'patrol') { mode.patrol = createPatrol(); mode.seed = 4242; }
+  if (kind === 'rush') {
+    mode.rush = createRush(); mode.rushSeed = 991;
+    mode.rushIndex = ticket.rings.length;
+    mode.rushCursor = ticket.rings.length ? ticket.rings[ticket.rings.length - 1].dist : 0;
+    mode.rushSeen = { hit: 0, miss: 0 };
+  }
+  if (kind === 'race') mode.race = { rivals: RIVALS.map(def => ({ def, flight: null, mesh: null, frame: 0, speedBase: 1 })), position: null };
+  if (kind === 'free') mode.freeFrom = ticket.from;
+  startFlight(ticket);
+  flightCtx.mode = mode;
+  flightCtx.booms = [];
+  if (kind === 'patrol') {
+    mode.patrol.wave = 1;
+    mode.patrol.drones = spawnPatrolWave(mode.seed, 1, 0);
+  }
+  if (kind === 'race') initRace();
+  updateModeChrome();
+  updateHud();
+}
+// The rivals take off with her: two more flight states on the same
+// course, each with its own copy of the gates, flown by pilotFrame —
+// the demo pilot that flies the test suite's deliveries. Their speed
+// class is HERS (the race is piloting, not machinery); the rubber band
+// in modes.js leans on it step by step to keep the finish honest.
+function initRace() {
+  const m = flightCtx.mode, f = flightCtx.flight;
+  const mine = planeById(save.planes.active).speedMul;
+  m.race.rivals.forEach((r, i) => {
+    const base = planeById(r.def.planeId);
+    r.speedBase = mine * (i === 0 ? 0.995 : 1.005); // Sinta a touch patient, Bagas a touch keen
+    r.flight = createFlight({
+      legDist: f.legDist, rings: ringCourse(f.legDist, 6, 777),
+      engineLvl: save.upgrades.engine, hullLvl: save.upgrades.hull,
+      wind: f.wind, runwayM: RUNWAY_M,
+      speedMul: r.speedBase, climbMul: base.climbMul, accelMul: base.accelMul || 1,
+      respMul: 1, assist: false,
+    });
+    r.mesh = R ? { set: buildPlane(R, { ...base, ...r.def.spec }), scale: r.def.spec.scale || 1 } : null;
+  });
+}
+function stepMode(dt) {
+  const ctx = flightCtx, m = ctx.mode;
+  if (!m || ctx.finished) return;
+  const f = ctx.flight;
+  if (m.kind === 'patrol') {
+    const p = m.patrol;
+    p.left -= dt;
+    stepDrones(p.drones, f.dist, dt, f.t);
+    if (!p.drones.some(d => d.alive && !d.escaped)) {
+      p.wave += 1;
+      p.drones.push(...spawnPatrolWave(m.seed, p.wave, f.dist));
+    }
+    m.cool = Math.max(0, m.cool - dt);
+    if ((keys.has('Space') || fireHeld) && f.airborne && m.cool <= 0) {
+      m.cool = 0.16;
+      p.shots += 1;
+      audio.blip('gun');
+      const hit = patrolShot(p.drones, f);
+      if (hit) {
+        hit.alive = false;
+        p.hits += 1; p.downed += 1;
+        p.score += patrolWaveSpec(hit.wave).points;
+        ctx.booms.push({ x: hit.x, dist: hit.dist, altM: hit.altM, t0: ambient });
+        audio.blip('hit');
+      }
+    }
+    if (p.left <= 0) endModeFlight('time');
+  } else if (m.kind === 'rush') {
+    const r = m.rush;
+    r.left -= dt;
+    // The course is dealt ahead forever: while the last ring sits
+    // inside the next kilometre and a half, deal the next one.
+    while (m.rushCursor < f.dist + 1500) {
+      const ring = rushRing(m.rushSeed, m.rushIndex, m.rushCursor);
+      m.rushIndex += 1; m.rushCursor = ring.dist;
+      f.rings.push({ ...ring });
+    }
+    if (f.ringsHit > m.rushSeen.hit) { for (let i = m.rushSeen.hit; i < f.ringsHit; i++) rushRingPassed(r); m.rushSeen.hit = f.ringsHit; }
+    if (f.ringsMissed > m.rushSeen.miss) { for (let i = m.rushSeen.miss; i < f.ringsMissed; i++) rushRingMissed(r); m.rushSeen.miss = f.ringsMissed; }
+    if (r.left <= 0) endModeFlight('time');
+  } else if (m.kind === 'race') {
+    for (const r of m.race.rivals) {
+      const af = r.flight;
+      if (!af || af.done) continue;
+      af.speedMul = r.speedBase * raceBand(f.dist, af.dist);
+      af.wind = f.wind;
+      const fr = makeFrame();
+      pilotFrame(af, fr);
+      stepFlight(af, fr, dt);
+      r.frame += 1;
+    }
+  }
+  if (ctx.booms) ctx.booms = ctx.booms.filter(b => ambient - b.t0 < 5);
+}
+function endModeFlight(reason) {
+  const ctx = flightCtx;
+  if (!ctx || !ctx.mode || ctx.finished) return;
+  ctx.mode.endReason = reason;
+  finishModeFlight();
+}
+function finishModeFlight() {
+  const ctx = flightCtx; if (!ctx || ctx.finished) return;
+  ctx.finished = true;
+  ctx.wxPin = null;
+  const f = ctx.flight, m = ctx.mode;
+  audio.engineStop(); audio.windStop(); audio.rainStop(); audio.radioStop();
+  if (f.exploded) { ctx.boom = { x: f.x, dist: f.dist, t0: ambient }; audio.blip('boom'); audio.jingle('lose'); }
+  else if (f.outcome === 'splash') audio.blip('splash');
+  else if (f.outcome === 'landed') audio.blip('thud', 0.3);
+  if (m.kind === 'patrol') m.newBest = recordPatrol(save.modes, m.patrol.score, m.patrol.downed);
+  else if (m.kind === 'rush') m.newBest = recordRush(save.modes, m.rush.score, m.rush.bestStreak);
+  else if (m.kind === 'race') {
+    m.race.position = racePosition(f, m.race.rivals.map(r => r.flight));
+    m.newBest = recordRace(save.modes, m.race.position);
+  } else if (m.kind === 'free') {
+    if (f.outcome === 'landed') {
+      m.freeVisitNew = recordFreeVisit(save.modes, ISLANDS[ctx.ticket.to].id);
+      if (m.freeVisitNew) audio.blip('stamp');
+      freeAt = ctx.ticket.to;
+    } else if (f.outcome === 'splash') freeAt = ctx.ticket.from; // picked up, back on the strip she left
+  }
+  storeSave(store, save);
+  setTimeout(() => { renderModeReceipt(); show('receipt'); }, 650);
+}
+function renderModeReceipt() {
+  const s = $('#scr-receipt'); s.innerHTML = '';
+  const ctx = flightCtx, f = ctx.flight, m = ctx.mode, tk = ctx.ticket;
+  const row = (label, val) => {
+    const r = el('div', 'money');
+    r.append(el('span', '', label), el('b', '', val));
+    return r;
+  };
+  const card = el('div', 'panel card');
+  const head = el('div', 'row');
+  head.append(el('span', 'route', `${ISLANDS[tk.from].name} → ${ISLANDS[tk.to].name}`));
+  card.append(head);
+  let title = '';
+  if (m.kind === 'patrol') {
+    title = t('rc_patrol_title');
+    const p = m.patrol;
+    card.append(
+      row(t('rc_patrol_downed'), String(p.downed)),
+      row(t('rc_patrol_shots'), `${p.shots} · ${p.hits}`),
+      row(t('rc_patrol_acc'), Math.round(patrolAccuracy(p) * 100) + '%'),
+      row(t('rc_patrol_wave'), String(p.wave)),
+      row(t('rc_patrol_score'), String(p.score)),
+    );
+  } else if (m.kind === 'rush') {
+    title = t('rc_rush_title');
+    const r = m.rush;
+    card.append(
+      row(t('rc_rush_rings'), String(r.threaded)),
+      row(t('rc_rush_streak'), String(r.bestStreak)),
+      row(t('rc_rush_score'), String(r.score)),
+    );
+  } else if (m.kind === 'race') {
+    title = t('rc_race_title');
+    card.append(el('p', 'meta', t('rc_race_pos', { pos: t('race_pos_' + m.race.position) })));
+    const myTime = f.outcome === 'landed' ? f.t : raceFinishTime(f, f.t);
+    const lines = [{ name: planeById(save.planes.active).callsign, time: myTime }];
+    for (const r of m.race.rivals) lines.push({ name: `${r.def.name} · ${r.def.callsign}`, time: raceFinishTime(r.flight, f.t) });
+    lines.sort((a, b) => a.time - b.time);
+    for (const L of lines) card.append(row(L.name, fmtClock(L.time)));
+  } else { // free
+    title = f.outcome === 'splash' ? t('rc_free_splash') : t('rc_free_title');
+    card.append(el('p', 'meta', t('rc_free_body')));
+    card.append(el('p', 'meta', m.freeVisitNew
+      ? t('rc_free_visit', { island: ISLANDS[tk.to].name }) : t('rc_free_novisit')));
+  }
+  if (m.newBest) card.append(el('p', 'meta', '✦ ' + t('mode_new_best')));
+  s.append(el('h2', 'ptitle', title), card);
+  const btnRow = el('div', 'row'); btnRow.style.justifyContent = 'center';
+  if (m.kind === 'free') {
+    btnRow.append(
+      btn(t('fly_on'), 'primary small', 'mode-flyon', () => { flightCtx = null; startMode('free'); }),
+      btn(t('end_flight'), 'small', 'mode-end', () => { flightCtx = null; renderTitle(); show('title'); }),
+    );
+  } else {
+    btnRow.append(
+      btn(t('mode_again'), 'primary small', 'mode-again', () => { const k = m.kind; flightCtx = null; startMode(k); }),
+      btn(t('title_btn'), 'small', 'mode-title', () => { flightCtx = null; renderTitle(); show('title'); }),
+    );
+  }
+  s.append(btnRow);
+}
+// Stage a patrol for the dossier and the feel tests: airborne on the
+// lane with a drone pinned in the gunsight, close enough to read. The
+// dossier flies it point-blank (32 m) — a 3 m drone at test distance
+// reads as a speck at thumbnail size — the test keeps its 130 m
+// firing window.
+function stagePatrol(aheadM = 130) {
+  if (!flightCtx || !flightCtx.mode || flightCtx.mode.kind !== 'patrol') return false;
+  const f = flightCtx.flight, p = flightCtx.mode.patrol;
+  f.dist = 400; f.alt = 30; f.x = 0; f.speed = 40; f.airborne = true; f.maxAlt = 30;
+  const d = p.drones.find(dr => dr.alive && !dr.escaped) || p.drones[0]; if (!d) return false;
+  d.baseDist = f.dist + aheadM; d.dist = d.baseDist;
+  d.baseX = 1.5; d.x = 1.5; d.baseAlt = 30.5; d.altM = 30.5;
+  // Pin the weave's phase to this instant, so the drone hangs centred
+  // in the sight instead of wherever its swing had carried it.
+  d.phase = -(f.t * patrolWaveSpec(d.wave).weaveFreq * Math.PI * 2);
+  return true;
+}
+
 // ---------- HUD ----------
 function updateHud() {
   if (!flightCtx) return;
@@ -1043,6 +1354,31 @@ function updateHud() {
   const tv = $('#thrval'); if (tv) tv.textContent = 'THR ' + Math.round(frame.throttle * 100) + '%';
   drawGauges(f);
   drawMinimap(f);
+  // The modes ride the same glass (v15): their own objective line and
+  // guide word over the campaign's, and — for the two timed sorties —
+  // the timer chip counts DOWN to the end of the run instead of up.
+  if (flightCtx.mode) {
+    const m = flightCtx.mode, tk = flightCtx.ticket;
+    const objEl2 = $('#hud-obj');
+    if (m.kind === 'patrol') {
+      if (objEl2) objEl2.innerHTML = t('hud_patrol', { n: m.patrol.downed, s: m.patrol.score });
+      guide.textContent = t('guide_patrol', { w: m.patrol.wave });
+      $('#timer').textContent = fmtClock(Math.max(0, m.patrol.left));
+      $('#hud-rings').innerHTML = `${t('wave', { n: m.patrol.wave })} <b>${m.patrol.drones.filter(d => d.alive && !d.escaped).length}</b>`;
+      $('#hud-dest').innerHTML = `▸ <b>${t('mode_patrol')}</b>`;
+    } else if (m.kind === 'rush') {
+      if (objEl2) objEl2.innerHTML = t('hud_rush', { s: m.rush.score, c: m.rush.combo });
+      guide.textContent = t('guide_rush');
+      $('#timer').textContent = fmtClock(Math.max(0, m.rush.left));
+      $('#hud-dest').innerHTML = `▸ <b>${t('mode_rush')}</b>`;
+    } else if (m.kind === 'race') {
+      const pos = racePosition(f, m.race.rivals.map(r => r.flight));
+      if (objEl2) objEl2.innerHTML = t('guide_race', { pos, g: f.ringsHit, n: f.rings.length });
+    } else if (m.kind === 'free') {
+      if (objEl2) objEl2.innerHTML = t('hud_free', { island: ISLANDS[tk.to].name });
+      guide.textContent = t('guide_free');
+    }
+  }
 }
 // Radar: north-up scope. The plane sits at the centre; the next ring is a
 // gold dot, the destination a cream marker at the top bearing, both placed
@@ -1233,6 +1569,7 @@ if (R) {
     shallows: buildShallows(R),
     destShallows: buildDestShallows(R),
     boom: buildExplosion(R),
+    drone: buildDrone(R),
     bird: buildBird(R),
     beacon: buildBeacon(R),
     flag: buildFlag(R),
@@ -1264,6 +1601,15 @@ function stageState() {
       rings: f.rings, legDist: f.legDist, time: IS_SHOT ? 3.7 : ambient, propSpin, fx: flightCtx.fx, camMode, env: envNow,
       surface: f.surface, discA: 0.08 + 0.24 * frame.throttle,
       boom: flightCtx.boom ? { x: flightCtx.boom.x, dist: flightCtx.boom.dist, age: ambient - flightCtx.boom.t0 } : null,
+      // A water-crash debrief stages over the sea, not the strip (v15
+      // gate fix): once a splash has ended the flight, the intact plane
+      // no longer poses behind the receipt — the smoke marks the spot.
+      noPlane: !!(flightCtx.finished && f.outcome === 'splash'),
+      drones: flightCtx.mode && flightCtx.mode.kind === 'patrol' ? flightCtx.mode.patrol.drones : null,
+      booms: flightCtx.booms ? flightCtx.booms.map(b => ({ x: b.x, dist: b.dist, altM: b.altM, age: ambient - b.t0 })) : null,
+      rivals: flightCtx.mode && flightCtx.mode.kind === 'race' ? flightCtx.mode.race.rivals.filter(r => r.flight).map((r, i) => ({
+        x: r.flight.x, alt: r.flight.alt, dist: r.flight.dist, bank: r.flight.bank, pitchVis: r.flight.pitchVis,
+        propSpin: propSpin + i * 2.1, throttle: 0.85, mesh: r.mesh })) : null,
       lookYaw: look.yaw, lookPitch: look.pitch, planeScale: planeById(save.planes.active).scale,
       camMul: planeById(save.planes.active).camMul || 1,
       seatY: planeById(save.planes.active).seatY, seatZ: planeById(save.planes.active).seatZ,
@@ -1311,12 +1657,13 @@ function stepOnce(dt) {
   }
   // The handling mode conditions raw hands into the flown frame.
   conditionFrame(frame, rawFrame, dt, save.handling || 'assisted', f.x);
-  // The wind is the weather's, and the weather follows the clock: a leg that
-  // crosses into a storm hour earns its harder drift honestly.
+  // The wind is the weather's, and the weather is the leg's pinned
+  // forecast (v15): the drift she briefed is the drift she flies.
   f.wind = windForSeason(save.settings.season) * envNow.windMul;
   const before = f.ringsHit;
   stepFlight(f, frame, dt);
   pollRadio(); // the tower speaks at flight phases, judged after each step
+  if (ctx.mode) stepMode(dt); // the modes keep their own clocks and ledgers
   propSpin += dt * (3 + frame.throttle * 34);
   audio.engineSet(frame.throttle, f.speed / (89 * 0.514444));
   audio.windSet(f.speed / 46);
@@ -1334,7 +1681,7 @@ function stepOnce(dt) {
   // while the nose drops would only shout over the recovery.
   if (g.stalled && !stallWarned) { stallWarned = true; audio.blip('stall'); }
   if (!g.stalled) stallWarned = false;
-  if (f.done) finishFlight();
+  if (f.done) { if (ctx.mode) finishModeFlight(); else finishFlight(); }
 }
 // The menu clock chip is rendered once per screen, so its text must be
 // refreshed as the clock runs — the value advanced all along, but the
@@ -1536,6 +1883,30 @@ if (shot === 'flight' || shot === 'receipt') {
     updateHud();
     steps = maxSteps; // posed: skip the pilot loop below
   }
+  // &at=ring poses her 55 m behind the LAST ring, centred on it, every
+  // earlier ring already threaded (v15): the dossier's mid-flight
+  // action frame — the destination island and its strip fill the
+  // horizon ahead, not a speck at the fog line. Posed like roll/rotate
+  // — no pilot loop, no radio history — so the frame is byte-stable
+  // and the HUD reads a flight honestly under way.
+  if (params.get('at') === 'ring' && shot === 'flight') {
+    const r = f.rings[f.rings.length - 1] || f.rings[0];
+    if (r) {
+      f.dist = r.dist - 55; f.alt = r.altM; f.x = r.x; f.speed = 34;
+      f.airborne = true; f.maxAlt = Math.max(f.maxAlt, r.altM); f.t = 74;
+      for (const rr of f.rings) {
+        if (rr.dist < f.dist - 7) { rr.passed = true; rr.missed = false; }
+        else { rr.passed = false; rr.missed = false; }
+      }
+      f.ringsHit = f.rings.filter(rr => rr.passed).length;
+      frame.throttle = 0.7; rawFrame.throttle = 0.7;
+    }
+    propSpin = 2.4;
+    flightCtx.frozen = true;
+    if (scene) scene.snap(stageState());
+    updateHud();
+    steps = maxSteps; // posed: skip the pilot loop below
+  }
   while (steps++ < maxSteps) {
     pilotFrame(f, fr);
     stepFlight(f, fr, STEP);
@@ -1553,9 +1924,47 @@ if (shot === 'flight' || shot === 'receipt') {
   updateHud();
   if (shot === 'receipt') finishFlight(true);
   else flightCtx.frozen = true;
+} else if (shot === 'patrol') {
+  // The mode frame (v15): a patrol sortie frozen with a smuggler drone
+  // pinned in the gunsight — the dossier's one mode-in-action frame.
+  // Fair weather is pinned like every dossier frame's, the drone flies
+  // closer than the test window so it reads at thumbnail size, and the
+  // ledger is posed mid-sortie (one down, 100 on the board) the way
+  // the flight frame poses its threaded rings.
+  save.settings.lang = 'en'; t = makeT('en'); save.started = true;
+  startMode('patrol');
+  save.clockH = 10.5;
+  flightCtx.wxPin = 'clear';
+  envNow = skyAt(save.day, save.clockH, flightCtx.wxPin);
+  flightCtx.weather = envNow.state;
+  stagePatrol(26);
+  // The reticle is a DOM element pinned at 46% height; the camera's
+  // own centre sits lower, so a drone at the plane's altitude renders
+  // under the sight, behind the prop disc. Raise the staged drone
+  // into the ring the sight actually draws.
+  const dr = flightCtx.mode.patrol.drones.find(d => d.alive && !d.escaped);
+  if (dr) { dr.baseAlt = 33.5; dr.altM = 33.5; dr.baseX = 0; dr.x = 0; }
+  const pp = flightCtx.mode.patrol;
+  pp.downed = 1; pp.hits = 3; pp.shots = 5; pp.score = 100;
+  frame.throttle = 0.8; rawFrame.throttle = 0.8;
+  propSpin = 2.4;
+  flightCtx.frozen = true;
+  updateModeChrome();
+  if (scene) scene.snap(stageState());
+  updateHud();
 } else if (shot === 'controls') {
   controlsReturn = 'title'; renderControls(); show('controls');
 } else if (shot === 'board') {
+  // The board frame (v15): a mid-campaign morning, pinned whole —
+  // the profile's earlier frames settle flights and move the day, so
+  // an unpinned board would drift between captures. Standing on
+  // Penida with one stamp banked and a working balance, the day seed
+  // fixed: the tickets regenerate identically every run.
+  save.settings.lang = 'en'; t = makeT('en'); save.started = true;
+  save.islandIdx = 1; save.stamps = ['penida']; save.saldo = 326000;
+  save.day = 2; save.clockH = 7.5;
+  boardCache = { day: -1, tickets: [] };
+  envNow = skyAt(save.day, save.clockH, null);
   showBoard();
 } else if (shot === 'hangar') {
   // The fleet frame: a hangar that can actually sell something — a
@@ -1576,11 +1985,15 @@ if (shot === 'flight' || shot === 'receipt') {
   renderTitle(); show('title');
   if (scene) scene.snap(stageState());
 } else if (shot === 'map') {
-  // The chart frame (v13): a campaign mid-way — three stamps banked,
-  // standing on Sumbawa, Flores the next stamp east.
+  // The chart frame (v13, pinned whole in v15): a campaign mid-way —
+  // three stamps banked, standing on Sumbawa, Flores the next stamp
+  // east; day, balance and clock pinned so the chips and the backdrop
+  // light are identical between captures.
   save.settings.lang = 'en'; t = makeT('en'); save.started = true;
   save.stamps = ['penida', 'lombok', 'sumbawa'];
   save.islandIdx = 3;
+  save.day = 2; save.saldo = 326000; save.clockH = 7.5;
+  envNow = skyAt(save.day, save.clockH, null);
   openMap('title');
 }
 
@@ -1624,6 +2037,30 @@ window.__senja = {
     flightCtx.weather = envNow.state;
   },
   setScheme, startFlight, board, cycleCam, setHandling,
+  // The modes (v15): start one the way the title cards do, read its
+  // ledger back, pin a patrol's quarry for the feel tests, and run a
+  // timed sortie's clock out without waiting three real minutes.
+  startMode,
+  stagePatrol,
+  get modeState() {
+    const m = flightCtx && flightCtx.mode;
+    if (!m) return null;
+    const out = { kind: m.kind, endReason: m.endReason || null, newBest: !!m.newBest };
+    if (m.patrol) out.patrol = { downed: m.patrol.downed, score: m.patrol.score, shots: m.patrol.shots, hits: m.patrol.hits, wave: m.patrol.wave, left: m.patrol.left, drones: m.patrol.drones.filter(d => d.alive && !d.escaped).length };
+    if (m.rush) out.rush = { score: m.rush.score, combo: m.rush.combo, threaded: m.rush.threaded, bestStreak: m.rush.bestStreak, left: m.rush.left };
+    if (m.race) out.race = { position: m.race.position || racePosition(flightCtx.flight, m.race.rivals.map(r => r.flight)), rivals: m.race.rivals.map(r => ({ dist: r.flight ? r.flight.dist : 0, done: r.flight ? r.flight.done : false, outcome: r.flight ? r.flight.outcome : null })) };
+    if (m.kind === 'free') out.free = { at: freeAt >= 0 ? freeAt : save.islandIdx, visitNew: !!m.freeVisitNew };
+    return out;
+  },
+  forceModeEnd() {
+    const m = flightCtx && flightCtx.mode; if (!m) return false;
+    if (m.patrol) m.patrol.left = 0.01;
+    if (m.rush) m.rush.left = 0.01;
+    return true;
+  },
+  // The debrief staging (v15 gate fix): true when the receipt behind
+  // this finished flight is staged as a wreck over water, not a plane.
+  get wreckStaged() { return !!(flightCtx && flightCtx.finished && flightCtx.flight.outcome === 'splash'); },
   setPilot(on) { pilotMode = !!on; },
   // Position the current flight for staged screenshots and feel sequences:
   // rings behind the new position count as missed, rings ahead stay live.

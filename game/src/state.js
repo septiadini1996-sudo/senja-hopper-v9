@@ -4,6 +4,7 @@ import { ISLANDS, HOP_M, CUSTOMERS, ringCourse, ringCountFor } from './world.js'
 import { weatherAtBlock, blockOfHour } from './clock.js';
 import { mulberry32 } from './util.js';
 import { planeById } from './planes.js';
+import { defaultModes } from './modes.js';
 
 export const SAVE_KEY = 'senja-hopper-save-v9';
 export const UPGRADE_COST = { engine: [0, 120000, 300000], fuel: [0, 90000, 220000], hull: [0, 100000, 260000], handling: [0, 80000, 190000] };
@@ -25,6 +26,10 @@ export function defaultSave() {
     stats: { flights: 0, deliveries: 0, rings: 0, earned: 0, bestGrade: null,
       rescues: 0, stormRuns: 0, photos: 0, smoothRuns: 0 },
     challengesDone: [],
+    // The mode ledger (v15): bests and free-flight visits for the four
+    // extra ways to fly. A NEW section, apart from the campaign's own
+    // fields, so a campaign save from any earlier version loads whole.
+    modes: defaultModes(),
     settings: { music: 3, sfx: 4, radio: 4, master: true, season: 'breezy', lang: 'en' },
     scheme: null, // null = auto (touch-first on coarse pointers)
     handling: 'assisted', // 'assisted' (damped, self-levelling) or 'direct' (raw)
@@ -54,6 +59,8 @@ export function loadSave(storage) {
     }
     return { ...base, ...parsed, settings: { ...base.settings, ...(parsed.settings || {}) },
       upgrades: { ...base.upgrades, ...(parsed.upgrades || {}) }, stats: { ...base.stats, ...(parsed.stats || {}) },
+      modes: { ...base.modes, ...(parsed.modes || {}),
+        freeVisits: Array.isArray(parsed.modes && parsed.modes.freeVisits) ? [...parsed.modes.freeVisits] : [] },
       planes };
   } catch { return defaultSave(); }
 }

@@ -193,6 +193,12 @@ export function createAudio(getSettings) {
     else if (kind === 'thud') { // touchdown: a low thump scaled by firmness
       tone(sfxGain, 92, t0, 0.22, 'sine', 0.10 + v * 0.22, 42);
       noiseHit(t0, 0.10, 0.03 + v * 0.06, 300, 'lowpass');
+    } else if (kind === 'gun') { // the patrol's nose guns: a short crack and a mechanical clack
+      noiseHit(t0, 0.09, 0.16, 1600, 'highpass');
+      tone(sfxGain, 190, t0, 0.08, 'square', 0.10, 70);
+    } else if (kind === 'hit') { // a drone going down: a crack, then its little engine dies in a fall
+      tone(sfxGain, 720, t0, 0.10, 'sawtooth', 0.14, 140);
+      noiseHit(t0, 0.28, 0.12, 700, 'lowpass');
     } else if (kind === 'boom') { // the explosion: a deep crack and a long rumble
       tone(sfxGain, 120, t0, 0.85, 'sawtooth', 0.30, 30);
       tone(sfxGain, 64, t0, 1.1, 'sine', 0.32, 26);
