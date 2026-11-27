@@ -2460,6 +2460,38 @@ if (shot === 'flight' || shot === 'receipt') {
   updateModeChrome();
   if (scene) scene.snap(stageState());
   updateHud();
+} else if (shot === 'race') {
+  // The race frame (v16.1): an air race mid-course on the Lombok →
+  // Sumbawa hop — the leader in the frame ahead, the next gate
+  // beyond her, the HUD reading POSITION 2/3 — GATE 2/6 and both
+  // rivals initialled on the route box. Posed like the patrol
+  // frame: every flight state pinned by hand (gates behind each
+  // runner marked threaded, so the positions the HUD computes are
+  // the positions staged), the frozen frame byte-stable.
+  save.settings.lang = 'en'; t = makeT('en'); save.started = true;
+  startMode('race');
+  save.clockH = 10.5;
+  flightCtx.wxPin = 'clear';
+  envNow = skyAt(save.day, save.clockH, flightCtx.wxPin);
+  flightCtx.weather = envNow.state;
+  const pose = (fl, dist, x, alt) => {
+    fl.dist = dist; fl.x = x; fl.alt = alt; fl.speed = 34;
+    fl.airborne = true; fl.maxAlt = Math.max(fl.maxAlt, alt);
+    for (const r of fl.rings) { r.passed = r.dist < dist - 7; r.missed = false; }
+    fl.ringsHit = fl.rings.filter(r => r.passed).length;
+  };
+  const f = flightCtx.flight;
+  pose(f, 1045, -4, 39);
+  f.t = 74;
+  const [sinta, bagas] = flightCtx.mode.race.rivals;
+  if (sinta && sinta.flight) pose(sinta.flight, 1090, -11, 40.5);
+  if (bagas && bagas.flight) pose(bagas.flight, 905, 13, 33);
+  frame.throttle = 0.85; rawFrame.throttle = 0.85;
+  propSpin = 2.4;
+  flightCtx.frozen = true;
+  updateModeChrome();
+  if (scene) scene.snap(stageState());
+  updateHud();
 } else if (shot === 'controls') {
   controlsReturn = 'title'; renderControls(); show('controls');
 } else if (shot === 'board') {
@@ -2475,14 +2507,24 @@ if (shot === 'flight' || shot === 'receipt') {
   envNow = skyAt(save.day, save.clockH, null);
   showBoard();
 } else if (shot === 'hangar') {
-  // The fleet frame: a hangar that can actually sell something — a
-  // stocked balance and a partly-grown fleet on the cards.
+  // The fleet frame (v16.1): the endgame hangar — the campaign
+  // complete, every airframe hers, the flagship selected so her
+  // jet fills the living preview while the starter heads the fleet
+  // list below. The scroll is pinned by measurement off the
+  // preview panel itself, so at dossier height the frame holds
+  // the whole preview and the first cards whole — the same state
+  // every capture, byte for byte.
   save.settings.lang = 'en'; t = makeT('en'); save.started = true;
   save.saldo = 900000;
-  save.planes.owned = ['kutilang', 'pipit'];
-  save.planes.active = 'pipit';
+  save.stamps = ['penida', 'lombok', 'sumbawa', 'flores', 'sulawesi', 'maluku', 'papua'];
+  save.islandIdx = 7;
+  save.planes.owned = ['kutilang', 'pipit', 'alap', 'bangau', 'raksasa'];
+  save.planes.active = 'kutilang';
   setActivePlaneMesh();
+  pvState = createPreviewState('raksasa');
   renderHangar(); show('hangar');
+  const hs = $('#scr-hangar'), pv = hs.querySelector('.pvcard');
+  if (pv) hs.scrollTop = Math.max(0, pv.offsetTop - 14);
 } else if (shot === 'title') {
   // The cover backdrop: the title screen flown over the home island —
   // senja light, the land airfield and its mountains behind the logo.
